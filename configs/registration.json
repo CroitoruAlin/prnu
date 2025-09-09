@@ -1,0 +1,5 @@
+{
+    "denoiser_path": "/home/fl488644/Restormer/pretrained_models/gaussian_color_denoising_blind.pth",
+    "resolutions": [1024, 1400],
+    "batch_size": "4"
+}
