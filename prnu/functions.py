@@ -17,8 +17,9 @@ import cv2
 import numpy as np
 import torch
 from einops import rearrange
-
-
+from utils import utils_image as util
+from utils import utils_model
+import time
 class ArgumentError(Exception):
     pass
 
@@ -54,12 +55,10 @@ def noise_extract_drunet(im: np.ndarray, model=None, levels: int = 100, sigma: i
     # ----------------------------------------
     # Preparation
     # ----------------------------------------
+    x8 = False
     noise_level_img = levels        # set AWGN noise level for noisy image
     noise_level_model = sigma       # set noise level for model
-    if model is None:
-        model, x8, device = model_creation()
-    else:
-        model, x8, device = model[0], model[1], model[2]
+    device = next(model.parameters()).device
     # ------------------------------------
     # (1) img_L (Low-quality images)
     # ------------------------------------
@@ -157,6 +156,42 @@ def extract_single(im: np.ndarray,
 
     return W
 
+def extract_single_drunet(im: np.ndarray,
+                   model=None,
+                   levels: int = 100,
+                   sigma: int = 100,
+                   wdft_sigma: float = 0) -> np.ndarray:
+    """
+    Extract noise residual from a single image
+    :param im: grayscale or color image, np.uint8
+    :param levels: number of wavelet decomposition levels (try: 15, 50, 100)
+    :param sigma: estimated noise power (try: 15, 50, 100)
+    :param wdft_sigma: estimated DFT noise power
+    :return: noise residual
+    """
+
+    # To use the Polimi noise extract function.
+    #W = noise_extract(im, levels, sigma)
+
+    # To use the DRUNet noise extract function.
+    start_time = time.time()
+    W = noise_extract_drunet(im, model, levels, sigma)
+    end_time = time.time()
+    print("noise extraction", end_time-start_time)
+    result = np.zeros(W.shape[:3])
+    if len(W.shape)>3:
+        W = rgb2gray_batched(W)
+        W = zero_mean_total_batched(W)
+        W_std = W.std(ddof=1, axis=(1, 2))
+        W = wiener_dft_batched(W, W_std).astype(np.float32)
+    else:
+        W = rgb2gray(W)
+        W = zero_mean_total(W)
+        W_std = W.std(ddof=1) if wdft_sigma == 0 else wdft_sigma
+        W = wiener_dft(W, W_std).astype(np.float32)
+
+    return W
+
 
 # Performs the noise extraction operation through a model-based algorithm.
 def noise_extract(im: np.ndarray, levels: int = 4, sigma: float = 5) -> np.ndarray:
@@ -235,6 +270,24 @@ def noise_extract_compact(args):
 
     # To use the DRUNet noise extract function.
     w = noise_extract_restomer(*args)
+    im = args[0]
+    try:
+        return w.float()
+    except:
+        return w.astype(np.float32)
+
+def noise_extract_compact_drunet(args):
+    """
+    Extract residual, multiplied by the image. Useful to save memory in multiprocessing operations
+    :param args: (im, levels, sigma), see noise_extract for usage
+    :return: residual, multiplied by the image
+    """
+
+    # To use the Polimi noise extract function.
+    #w = noise_extract(*args)
+
+    # To use the DRUNet noise extract function.
+    w = noise_extract_drunet(*args)
     im = args[0]
     try:
         return w.float()
@@ -321,6 +374,149 @@ def cut_ctr(array: np.ndarray, sizes: tuple) -> np.ndarray:
             array = np.take(array, np.arange(axis_start_idx, axis_end_idx), axis)
     return array
 
+
+
+def rgb2gray_batched(im: np.ndarray) -> np.ndarray:
+    """
+    Efficient RGB → Grayscale conversion (Binghamton weights).
+    Works with single image (H,W,3) or batch (B,H,W,3).
+    Returns float32 grayscale with shape (H,W) or (B,H,W).
+    """
+    weights = np.array([0.29893602, 0.58704307, 0.11402090], dtype=np.float32)
+
+    if im.ndim == 2:
+        # already grayscale
+        return im.astype(np.float32)
+
+    if im.ndim == 3:
+        if im.shape[2] == 1:
+            return im[..., 0].astype(np.float32)
+        elif im.shape[2] == 3:
+            return np.tensordot(im, weights, axes=([-1],[0])).astype(np.float32)
+        else:
+            raise ValueError("Input image must have 1 or 3 channels")
+
+    if im.ndim == 4:
+        if im.shape[-1] == 1:
+            return im[..., 0].astype(np.float32)
+        elif im.shape[-1] == 3:
+            return np.tensordot(im, weights, axes=([-1],[0])).astype(np.float32)
+        else:
+            raise ValueError("Input images must have 1 or 3 channels")
+
+    raise ValueError("Input must be (H,W), (H,W,1/3), or (B,H,W,1/3)")
+
+def zero_mean_total_batched(im: np.ndarray) -> np.ndarray:
+    """
+    ZeroMeanTotal as from Binghamton toolbox, vectorized.
+    Works on single images (H,W) or batches (B,H,W).
+    Applies zero-mean separately to the 4 checkerboard subgrids.
+    Returns float32 array with same shape.
+    """
+    im = im.astype(np.float32, copy=False)
+
+    if im.ndim == 2:   # (H,W)
+        out = im.copy()
+        for i in (0,1):
+            for j in (0,1):
+                sub = out[i::2, j::2]
+                out[i::2, j::2] = sub - sub.mean(dtype=np.float32)
+        return out
+
+    elif im.ndim == 3:  # (B,H,W)
+        out = im.copy()
+        for i in (0,1):
+            for j in (0,1):
+                sub = out[:, i::2, j::2]  # shape (B,h,w)
+                means = sub.mean(axis=(1,2), keepdims=True, dtype=np.float32)
+                out[:, i::2, j::2] = sub - means
+        return out
+
+    else:
+        raise ValueError("Input must be (H,W) or (B,H,W)")
+
+
+def wiener_dft_batched(im, sigma) -> np.ndarray:
+    """
+    Adaptive Wiener filter applied to the 2D FFT of the image.
+    Works with (H,W) or (B,H,W). Supports scalar sigma or per-image sigma (B,).
+
+    Parameters
+    ----------
+    im : np.ndarray
+        Input image(s), shape (H,W) or (B,H,W). Real-valued.
+    sigma : float or np.ndarray
+        Estimated noise std. If batched input, can be scalar or shape (B,).
+
+    Returns
+    -------
+    np.ndarray
+        Filtered image(s), same shape as `im`, dtype float32.
+    """
+    im = np.asarray(im)
+    if im.ndim == 2:
+        im_in = im[np.newaxis, ...]        # -> (1,H,W)
+        batched = False
+    elif im.ndim == 3:
+        im_in = im                          # (B,H,W)
+        batched = True
+    else:
+        raise ValueError("`im` must be (H,W) or (B,H,W)")
+
+    B, H, W = (im_in.shape[0], im_in.shape[1], im_in.shape[2])
+
+    # Prepare sigma (noise std) per image
+    sigma = np.asarray(sigma, dtype=np.float32)
+    if sigma.ndim == 0:
+        sigma = np.full((B,), float(sigma), dtype=np.float32)
+    elif sigma.shape != (B,):
+        raise ValueError(f"`sigma` must be scalar or shape ({B},), got {sigma.shape}")
+    noise_var = sigma ** 2
+    # reshape for broadcasting across (H,W)
+    noise_var_ = noise_var[:, None, None]   # (B,1,1)
+
+    # FFT2 over last two axes (vectorized over batch)
+    im_fft = np.fft.fft2(im_in, axes=(-2, -1))                   # (B,H,W), complex
+    # Magnitude normalized by sqrt(H*W), same as original
+    denom = (H * W) ** 0.5
+    mag = np.abs(im_fft) / denom                                  # (B,H,W), real
+
+    # --- Apply adaptive Wiener on magnitude ---
+    # Expecting a function `wiener_adaptive(x, noise_var)` that operates per-image.
+    # If your `wiener_adaptive` supports batched input, call once; otherwise loop.
+    # Below we implement a simple per-pixel Wiener gain on the magnitude domain:
+    #
+    #   S = max(mag^2 - noise_var, 0)   (signal power estimate)
+    #   G = S / (S + noise_var)         (Wiener gain in [0,1])
+    #
+    # This mirrors the common Wiener filter form without requiring an external function.
+    #
+    power = mag**2                                               # (B,H,W)
+    signal_power = np.maximum(power - noise_var_, 0.0)           # (B,H,W)
+    G = signal_power / (signal_power + noise_var_ + 1e-12)       # (B,H,W) safe denom
+
+    # Avoid division by zero in the original mag (if any zeros)
+    # When mag == 0, set mag to 1 (dummy) and desired magnitude (G*mag) to 0 via G mask.
+    zero_mask = (mag == 0)
+    safe_mag = mag.copy()
+    safe_mag[zero_mask] = 1.0
+    # Desired magnitude after filtering is G * mag
+    desired_mag = G * mag
+    desired_mag[zero_mask] = 0.0
+
+    # Scale complex spectrum to match desired magnitude:
+    # im_fft_filt = im_fft * (desired_mag / mag)
+    scale = desired_mag / safe_mag                                # (B,H,W)
+    im_fft_filt = im_fft * scale                                  # broadcast to complex
+
+    # Inverse FFT and take real part
+    im_filt = np.fft.ifft2(im_fft_filt, axes=(-2, -1)).real       # (B,H,W)
+    im_filt = im_filt.astype(np.float32, copy=False)
+
+    # Return with original shape
+    if not batched:
+        return im_filt[0]
+    return im_filt
 
 def wiener_dft(im: np.ndarray, sigma: float) -> np.ndarray:
     """
@@ -593,6 +789,44 @@ def aligned_cc(k1: np.ndarray, k2: np.ndarray) -> dict:
     return {'cc': cc, 'ncc': ncc}
 
 
+def aligned_cc_torch(k1: np.ndarray, k2: np.ndarray) -> dict:
+    """
+    Aligned PRNU cross-correlation, GPU-accelerated with PyTorch.
+    Input: 
+        k1: (n1, nk) or (n1, nk1, nk2, ...)
+        k2: (n2, nk) or (n2, nk1, nk2, ...)
+    Output:
+        dict with:
+          'cc'  : (n1,n2) cross-correlation matrix (float32, numpy)
+          'ncc' : (n1,n2) normalized cross-correlation matrix (float32, numpy)
+    """
+    # ---- Cast numpy → torch, move to GPU ----
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    t1 = torch.from_numpy(np.asarray(k1, dtype=np.float32)).to(device)
+    t2 = torch.from_numpy(np.asarray(k2, dtype=np.float32)).to(device)
+
+    # Flatten to (N, D)
+    t1 = t1.reshape(t1.shape[0], -1).contiguous()
+    t2 = t2.reshape(t2.shape[0], -1).contiguous()
+
+    # ---- Norms ----
+    t1_norm = torch.norm(t1, p=2, dim=1, keepdim=True)  # (n1,1)
+    t2_norm = torch.norm(t2, p=2, dim=1, keepdim=True)  # (n2,1)
+
+    # ---- Cross-correlation matrix ----
+    cc = t1 @ t2.T   # (n1,n2)
+
+    # ---- Normalized cross-correlation ----
+    denom = t1_norm * t2_norm.T
+    ncc = cc / denom.clamp(min=1e-12)
+
+    # ---- Back to CPU numpy ----
+    cc = cc.float().cpu().numpy()
+    ncc = ncc.float().cpu().numpy()
+
+    return {"cc": cc, "ncc": ncc}
+
+
 def pce(cc: np.ndarray, neigh_radius: int = 2) -> dict:
     """
     PCE position and value
@@ -649,8 +883,8 @@ def stats(cc: np.ndarray, gt: np.ndarray, ) -> dict:
 
     assert (cc.shape == gt.shape)
     assert (gt.dtype == np.bool)
-    print(gt.shape)
-    print(cc.shape)
+    # print(gt.shape)
+    # print(cc.shape)
     top_1_acc = top_k_accuracy(np.argmax(gt, axis=0), cc.T, k=1)
     top_5_acc = top_k_accuracy(np.argmax(gt, axis=0), cc.T, k=5)
     fpr, tpr, th = roc_curve(gt.flatten(), cc.flatten())
