@@ -5,6 +5,8 @@ import yaml
 import gc
 import numpy as np
 from datasets import load_from_disk, Features, Value, Array2D
+from einops import rearrange
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from processors.dataset import DeviceRegistrationDataset
 from basicsr.models.archs.restormer_arch import Restormer
@@ -66,8 +68,7 @@ def _stack_prnu_fast(ds, flat_shape=None):
     if prnus is None:
         ds_np = ds.with_format("numpy", columns=["prnu"])
         prnus = np.stack(ds_np["prnu"], axis=0)
-
-    return prnus
+    return prnus, ds['device_id']
 
 
 class Comparison:
@@ -81,7 +82,16 @@ class Comparison:
             self.config["output_database_dir"],
             keep_in_memory=False
         )
-        # print(np.array(self.registered_devices[:1]['prnu'][0])[:5, :5], self.registered_devices[:1]['device_id'])
+        # indices = [i for i,d in enumerate(self.registered_devices['device_id']) if d == 'camera_1']
+        # signal_1 = np.array(self.registered_devices.select(indices)['prnu'][0])
+        # prnu_signals = load_from_disk("/home/biodeep/alin/prnu/prnu_signals_1024")
+        
+        # for j in range(1, 100):
+        #     indices = [i for i,d in enumerate(prnu_signals['device_id']) if d == f'camera_{j}']
+        #     # print(indices)
+        #     signal_2 = np.array(prnu_signals.select(indices)['prnu'][0])
+        #     print(np.sum(signal_1*signal_2)/(np.linalg.norm(signal_1)*np.linalg.norm(signal_2)))
+        # print(np.array(test_ds['prnu'][0])[:5, :5], np.array(test_ds['prnu'][0]).shape, test_ds['device_id'], test_ds['resolutions'])
         # exit()
         keep_cols = [c for c in ["device_id", "resolutions", "prnu"] if c in self.registered_devices.column_names]
         drop_cols = [c for c in self.registered_devices.column_names if c not in keep_cols]
@@ -89,19 +99,22 @@ class Comparison:
             self.registered_devices = self.registered_devices.remove_columns(drop_cols)
 
         
-        unique_res = np.unique(self.registered_devices["resolutions"]).tolist()
-        self.prnus_per_resolution = {r: filter_dataset_by_resolution(self.registered_devices, r) for r in unique_res}
+        unique_res = self.config['resolutions']#
+        self.prnus_per_resolution = {r: filter_dataset_by_resolution(self.registered_devices, r) for r in unique_res}#{r: self.registered_devices for r in unique_res}###{
 
         self.prnu_cache = {}
         cache_root = os.path.join(self.config["output_database_dir"], "_prnu_cache")
         for r, ds_r in self.prnus_per_resolution.items():
             
-            first = ds_r[0]["prnu"]
-            flat_shape = int(np.prod(np.asarray(first).shape)) if hasattr(first, "shape") else None
+            first = np.asarray(ds_r[0]["prnu"])
+            # print(np.asarray(first).shape)
+            # exit()
+            flat_shape = int(np.prod(first.shape)) if hasattr(first, "shape") else None
             t0 = time.time()
-            prnus = _stack_prnu_fast(ds_r, flat_shape=flat_shape)
+            prnus, devices = _stack_prnu_fast(ds_r, flat_shape=flat_shape)
             self.prnu_cache[r] = prnus
             t1 = time.time()
+        self.devices = list(devices)
 
     def _create_denoiser(self):
         if self.config.get('denoiser_type') == 'restormer':
@@ -159,9 +172,9 @@ class Comparison:
             for images, gt_device in tqdm(dataloader):
                 if self.config.get('denoiser_type') == 'drunet':
                     t_align0 = time.time()
-                    query_noise = extract_single_drunet(images, self.model, 100, 100)
+                    query_noise = extract_single_drunet(images, self.model, 50, 50)
                     t_align1 = time.time()
-                    print("Extract single", t_align1-t_align0)
+                    # print("Extract single", t_align1-t_align0)
                 else:
                     query_noise = extract_single(images, self.model, 50, 50)
                 
@@ -170,7 +183,7 @@ class Comparison:
                 t_align0 = time.time()
                 scores = aligned_cc_torch(query_noise, prnus)
                 t_align1 = time.time()
-                print("Align cc", t_align1-t_align0)
+                # print("Align cc", t_align1-t_align0)
                 resolution_scores.append(scores['ncc'].T)
 
             resolution_scores = np.concatenate(resolution_scores, axis=1)
@@ -185,12 +198,12 @@ class Comparison:
         weights = weights / weights.max()
         final_scores = np.stack(final_scores, axis=0)
         final_scores = np.sum(final_scores * weights[:, None, None], axis=0)
-
+        # print(final_scores.shape)
         if gt is not None:
             all_query_devices = np.array(all_query_devices)
-            unique_devices = np.unique(self.registered_devices['device_id'])
+            unique_devices = self.devices
             gt_bin = prnu.gt(unique_devices, all_query_devices)
-            # print(final_scores.shape, gt_bin.shape)
+            print(final_scores.shape, gt_bin.shape)
             stats_cc = prnu.stats(final_scores, gt_bin)
             print('AUC on CC {:.5f}'.format(stats_cc['auc']))
             print("Top 1 accuracy", stats_cc["top-1-acc"])
@@ -203,10 +216,17 @@ class Comparison:
 if __name__ == "__main__":
     comparison = Comparison()
     t0 = time.time()
-    image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False).filter(lambda sample: "view_2" in sample['view'])[:100]
+    image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False).filter(lambda sample: "view_2" in sample['view'])
+    # print(len(image_dataset))
+    # exit()
     gt_devices = list(image_dataset['device'])
     image_paths = [os.path.join("../datasets/PRNU/", image_path) for image_path in list(image_dataset['image_path'])]
-    scores = comparison.device_comparison(image_paths,
-    gt=gt_devices)
+    scores = comparison.device_comparison(image_paths, gt=gt_devices)
     # print(scores.shape, scores)
     print("Total time:", time.time() - t0)
+
+#[[-0.03390784 -0.00919679 -0.05382158 -0.03892823 -0.00190165]
+# [ 0.03498485 -0.03103287 -0.05388374 -0.00126721 -0.04313271]
+# [ 0.00804291 -0.033762   -0.00577763 -0.01076424 -0.04807157]
+# [-0.02588321 -0.03547777  0.00472724  0.01777871 -0.05648795]
+# [-0.03781606 -0.02342686  0.03828652 -0.01224873 -0.05234518]]

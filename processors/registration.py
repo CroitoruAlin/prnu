@@ -60,16 +60,11 @@ class Registration():
                     normalized_images=images/255.
                     noise_estimated = noise_extract_compact((normalized_images, self.model, 50, 50))
                 else:
-                    noise_estimated = noise_extract_compact_drunet((images, self.model, 100, 100))
+                    noise_estimated = noise_extract_compact_drunet((images, self.model, 50,50))
                 noises.extend(noise_estimated.cpu().numpy()/255.)
                 all_prnus_devices.extend(device_name)
             
-
-            RPsum = np.zeros(noises[0].shape, np.float32)
-            for noise in noises:    
-                RPsum += noise
-            noises = np.array(noises)
-            K = RPsum / len(noises)
+            K = np.array(noises).mean(axis=0)
             K = rgb2gray(K)
             K = zero_mean_total(K)
             K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
@@ -105,14 +100,18 @@ class Registration():
             return new_ds
 
     def register_device(self, folder_images, device_name, persist=False):
+        self.model.to("cuda")
         image_paths = []
         devices = []
         for image in os.listdir(folder_images):
-            if not is_png_truncated(image):
-                image_paths.append(os.path.join(root_images, image))
+            image_path =  os.path.join(folder_images, image)
+            if not is_png_truncated(image_path):
+                image_paths.append(image_path)
                 devices.append(device_name)
 
-        return self._create_dataset(image_paths, devices, persist)
+        ds = self._create_dataset(image_paths, devices, persist)
+        self.model.to("cpu")
+        return ds
 
    
 
@@ -126,7 +125,7 @@ class Registration():
             for device in tqdm(unique_devices):
                 device_dataset = filter_dataset_by_device(dataset, device)
                 image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']]
-                devices = device_dataset['device']
+                devices = list(device_dataset['device'])
                 list_datasets.append(self._create_dataset(image_paths, devices, persist=individual_persist))
             if not os.path.exists(self.config["output_database_dir"]):
                 new_ds = concatenate_datasets(list_datasets)    
@@ -175,6 +174,8 @@ def is_png_truncated(filename):
    
 if __name__ == "__main__":
     registration_service = Registration()
-    registration_service.register_multiple_devices("/home/biodeep/alin/datasets/PRNU")
+    ds = registration_service.register_multiple_devices("/home/biodeep/alin/datasets/PRNU")
+    # ds = registration_service.register_device("../datasets/PRNU/camera_1/view_1", "camera_1")
+    # ds.save_to_disk(registration_service.config['output_database_dir'])
 
 

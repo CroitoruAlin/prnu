@@ -177,13 +177,23 @@ def extract_single_drunet(im: np.ndarray,
     start_time = time.time()
     W = noise_extract_drunet(im, model, levels, sigma)
     end_time = time.time()
-    print("noise extraction", end_time-start_time)
+    # print("noise extraction", end_time-start_time)
     result = np.zeros(W.shape[:3])
     if len(W.shape)>3:
-        W = rgb2gray_batched(W)
-        W = zero_mean_total_batched(W)
-        W_std = W.std(ddof=1, axis=(1, 2))
-        W = wiener_dft_batched(W, W_std).astype(np.float32)
+        # W = rgb2gray_batched(W)
+        # W = zero_mean_total_batched(W)
+        # W_std = W.std(ddof=1, axis=(1, 2))
+        # W = wiener_dft_batched(W, W_std).astype(np.float32)
+        # W = W/255.
+        # exit()
+        for i in range(W.shape[0]):
+            result[i] = rgb2gray(W[i]/255.)
+            result[i] = zero_mean_total(result[i])
+            W_std = result[i].std(ddof=1) if wdft_sigma == 0 else wdft_sigma
+            result[i] = wiener_dft(result[i], W_std).astype(np.float32)
+        W=result
+        # print(W.max(), W.min())
+
     else:
         W = rgb2gray(W)
         W = zero_mean_total(W)
@@ -867,6 +877,7 @@ def top_k_accuracy(y_true, y_pred, k=1):
     """
     # Get the indices of the top k predictions
     top_k_preds = np.argsort(y_pred, axis=1)[:, -k:][:, ::-1]  # shape: [N, k], descending order
+    # print(np.sort(y_pred, axis=1)[:, -k:][:, ::-1])
     # For Top-1: k=1, for Top-5: k=5
     match_array = [y_true[i] in top_k_preds[i] for i in range(len(y_true))]
     return np.mean(match_array)
@@ -881,10 +892,9 @@ def stats(cc: np.ndarray, gt: np.ndarray, ) -> dict:
     assert (cc.shape == gt.shape)
     assert (gt.dtype == np.bool)
 
-    assert (cc.shape == gt.shape)
-    assert (gt.dtype == np.bool)
     # print(gt.shape)
     # print(cc.shape)
+    # exit()
     top_1_acc = top_k_accuracy(np.argmax(gt, axis=0), cc.T, k=1)
     top_5_acc = top_k_accuracy(np.argmax(gt, axis=0), cc.T, k=5)
     fpr, tpr, th = roc_curve(gt.flatten(), cc.flatten())
