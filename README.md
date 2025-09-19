@@ -2,9 +2,11 @@
 
 ![](assets/samples_dataset.png)
 
-Due to size limitations we couldn't the full dataset without violating the blind review policies. However, we share a much smaller subset at the following link:
+Due to size limitations we couldn't share the full dataset without violating the blind review policies. However, we share a much smaller subset at the following link:
 
 https://drive.google.com/drive/folders/1s3DTGCddpjjJP5nHGEyZE9sEv3OI4gFx?usp=sharing
+
+!!! We underline that we will make the entire dataset public if the article is accepted.
 
 ### Environment
 Create a conda environmet with python 3.9 installed and install the dependencies from requirements.txt
