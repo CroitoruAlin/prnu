@@ -1,5 +1,5 @@
 {
-    "denoiser_path": "/home/biodeep/alin/prnu/pretrained_models/drunet_color.pth",
+    "denoiser_path": "pretrained_models/drunet_color.pth",
     "denoiser_type": "drunet",
     "resolutions": [1024, 1400],
     "batch_size": 12,

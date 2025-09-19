@@ -1,0 +1,16 @@
+{
+    "denoiser_path": "pretrained_models/gaussian_color_denoising_blind.pth",
+    "data_path": "../datasets/PRNU-Bench-subset",
+    "train_devices": "train_devices.npy",
+    "test_devices": "test_devices.npy",
+    "denoiser_type": "restormer",
+    "no_samples_prnu_estimation": 5,
+    "resolutions": [1024, 1400],
+    "batch_size": 1,
+    "output_prnu_fingerprint": "registered_devices",
+    "output_training_queries": "training_queries",
+    "output_queries": "queries",
+    "num_workers": 12,
+    "device": "cuda",
+    "writer_batch_size": 100
+}

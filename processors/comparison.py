@@ -82,17 +82,6 @@ class Comparison:
             self.config["output_database_dir"],
             keep_in_memory=False
         )
-        # indices = [i for i,d in enumerate(self.registered_devices['device_id']) if d == 'camera_1']
-        # signal_1 = np.array(self.registered_devices.select(indices)['prnu'][0])
-        # prnu_signals = load_from_disk("/home/biodeep/alin/prnu/prnu_signals_1024")
-        
-        # for j in range(1, 100):
-        #     indices = [i for i,d in enumerate(prnu_signals['device_id']) if d == f'camera_{j}']
-        #     # print(indices)
-        #     signal_2 = np.array(prnu_signals.select(indices)['prnu'][0])
-        #     print(np.sum(signal_1*signal_2)/(np.linalg.norm(signal_1)*np.linalg.norm(signal_2)))
-        # print(np.array(test_ds['prnu'][0])[:5, :5], np.array(test_ds['prnu'][0]).shape, test_ds['device_id'], test_ds['resolutions'])
-        # exit()
         keep_cols = [c for c in ["device_id", "resolutions", "prnu"] if c in self.registered_devices.column_names]
         drop_cols = [c for c in self.registered_devices.column_names if c not in keep_cols]
         if drop_cols:
@@ -100,7 +89,7 @@ class Comparison:
 
         
         unique_res = self.config['resolutions']#
-        self.prnus_per_resolution = {r: filter_dataset_by_resolution(self.registered_devices, r) for r in unique_res}#{r: self.registered_devices for r in unique_res}###{
+        self.prnus_per_resolution = {r: filter_dataset_by_resolution(self.registered_devices, r) for r in unique_res}
 
         self.prnu_cache = {}
         cache_root = os.path.join(self.config["output_database_dir"], "_prnu_cache")

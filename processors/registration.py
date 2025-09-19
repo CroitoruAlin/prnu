@@ -25,7 +25,7 @@ class Registration():
 
     def __init__(self):
         # Load JSON config
-        with open("configs/registration.json", "r") as f:
+        with open("configs/config.json", "r") as f:
             self.config = json.load(f)
             self._create_denoiser()
         
@@ -56,12 +56,14 @@ class Registration():
             noises = []
             all_prnus_devices = []
             for images, device_name in  dataloader:
-                if self.config['denoiser_type'] == 'restormer':
-                    normalized_images=images/255.
-                    noise_estimated = noise_extract_compact((normalized_images, self.model, 50, 50))
-                else:
-                    noise_estimated = noise_extract_compact_drunet((images, self.model, 50,50))
-                noises.extend(noise_estimated.cpu().numpy()/255.)
+                with torch.no_grad():
+                    if self.config['denoiser_type'] == 'restormer':
+                        normalized_images=images/255.
+                        noise_estimated = noise_extract_compact((normalized_images, self.model, 50, 50))
+                        noises.extend(noise_estimated/255.)
+                    else:
+                        noise_estimated = noise_extract_compact_drunet((images, self.model, 50,50))
+                        noises.extend(noise_estimated.cpu().numpy()/255.)
                 all_prnus_devices.extend(device_name)
             
             K = np.array(noises).mean(axis=0)
@@ -77,72 +79,77 @@ class Registration():
                 'resolutions':Value("int32"),
                 "prnu": Sequence(Sequence(Value("float32")))
             })
-        if not os.path.exists(self.config["output_database_dir"]):
-            os.makedirs(self.config["output_database_dir"], exist_ok=False)
+        if not os.path.exists(self.config["output_prnu_fingerprint"]):
+            os.makedirs(self.config["output_prnu_fingerprint"], exist_ok=False)
             ds = Dataset.from_generator(generator=lambda: self._prnu_extraction(image_paths, devices), features=features, writer_batch_size = self.config["writer_batch_size"], keep_in_memory=False)
             if persist:
-                ds.save_to_disk(self.config["output_database_dir"])
+                ds.save_to_disk(self.config["output_prnu_fingerprint"])
             return ds
-        elif is_hf_dataset_dir(self.config["output_database_dir"]):
+        elif is_hf_dataset_dir(self.config["output_prnu_fingerprint"]):
             new_ds = Dataset.from_generator(generator=lambda: self._prnu_extraction(image_paths, devices), features=features, writer_batch_size = self.config["writer_batch_size"], keep_in_memory=False)
             if persist:
-                old_ds = load_from_disk(self.config["output_database_dir"], keep_in_memory=False)
+                old_ds = load_from_disk(self.config["output_prnu_fingerprint"], keep_in_memory=False)
                 merged_ds = concatenate_datasets([new_ds, old_ds])
-                merged_ds.save_to_disk(self.config["output_database_dir"]+"_tmp")
-                shutil.rmtree(self.config["output_database_dir"])
-                os.rename(self.config["output_database_dir"]+"_tmp", self.config["output_database_dir"])
+                merged_ds.save_to_disk(self.config["output_prnu_fingerprint"]+"_tmp")
+                shutil.rmtree(self.config["output_prnu_fingerprint"])
+                os.rename(self.config["output_prnu_fingerprint"]+"_tmp", self.config["output_prnu_fingerprint"])
                 return merged_ds
             return new_ds
         else:
             new_ds = Dataset.from_generator(generator=lambda: self._prnu_extraction(image_paths, devices), features=features, writer_batch_size = self.config["writer_batch_size"], keep_in_memory=False)
             if persist:
-                new_ds.save_to_disk(self.config["output_database_dir"])
+                new_ds.save_to_disk(self.config["output_prnu_fingerprint"])
             return new_ds
 
     def register_device(self, folder_images, device_name, persist=False):
         self.model.to("cuda")
         image_paths = []
         devices = []
-        for image in os.listdir(folder_images):
-            image_path =  os.path.join(folder_images, image)
-            if not is_png_truncated(image_path):
-                image_paths.append(image_path)
-                devices.append(device_name)
+        if isinstance(folder_images, str):
+            for image in os.listdir(folder_images):
+                image_path =  os.path.join(folder_images, image)
+                if not is_png_truncated(image_path):
+                    image_paths.append(image_path)
+                    devices.append(device_name)
+        else:
+            image_paths = folder_images
+            devices = [device_name]*len(image_paths)
 
         ds = self._create_dataset(image_paths, devices, persist)
         self.model.to("cpu")
         return ds
 
    
-
     def register_multiple_devices(self, root_folder_devices, individual_persist = False):
         self.model.to("cuda")
         if is_hf_dataset_dir(root_folder_devices):
             dataset = load_from_disk(root_folder_devices)
             dataset = filter_dataset_for_prnu_estimation(dataset)
             unique_devices = list(set(list(dataset['device'])))
-            list_datasets = []
+            list_datasets_fingerprint = []
+            list_datasets_residuals = []
             for device in tqdm(unique_devices):
                 device_dataset = filter_dataset_by_device(dataset, device)
                 image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']]
                 devices = list(device_dataset['device'])
-                list_datasets.append(self._create_dataset(image_paths, devices, persist=individual_persist))
-            if not os.path.exists(self.config["output_database_dir"]):
-                new_ds = concatenate_datasets(list_datasets)    
-                os.makedirs(self.config["output_database_dir"], exist_ok=False)
-                new_ds.save_to_disk(self.config["output_database_dir"])
-            elif is_hf_dataset_dir(self.config["output_database_dir"]):
-                old_ds = load_from_disk(self.config["output_database_dir"], keep_in_memory=False)
-                merged_ds = concatenate_datasets(list_datasets+[old_ds])
-                print(merged_ds['device_id'])
-                merged_ds.save_to_disk(self.config["output_database_dir"]+"_tmp")
-                shutil.rmtree(self.config["output_database_dir"])
-                os.rename(self.config["output_database_dir"]+"_tmp", self.config["output_database_dir"]) 
-            else:
-                new_ds = concatenate_datasets(list_datasets)
-                new_ds.save_to_disk(self.config["output_database_dir"])
+                list_datasets_fingerprint.append(self._create_dataset(image_paths, devices, persist=individual_persist))
+            self._save_dataset(list_datasets_fingerprint, "output_prnu_fingerprint")
         self.model.to("cpu")
-
+        
+    def _save_dataset(self, list_datasets, path_key="output_prnu_fingerprint"):
+        if not os.path.exists(self.config[path_key]):
+            new_ds = concatenate_datasets(list_datasets)    
+            os.makedirs(self.config[path_key], exist_ok=False)
+            new_ds.save_to_disk(self.config[path_key])
+        elif is_hf_dataset_dir(self.config[path_key]):
+            old_ds = load_from_disk(self.config[path_key], keep_in_memory=False)
+            merged_ds = concatenate_datasets(list_datasets+[old_ds])
+            merged_ds.save_to_disk(self.config[path_key]+"_tmp")
+            shutil.rmtree(self.config[path_key])
+            os.rename(self.config[path_key]+"_tmp", self.config[path_key]) 
+        else:
+            new_ds = concatenate_datasets(list_datasets)
+            new_ds.save_to_disk(self.config[path_key])
 def is_hf_dataset_dir(path: str) -> bool:
     if not os.path.isdir(path):
         return False
@@ -172,10 +179,5 @@ def is_png_truncated(filename):
         end = f.read()
         return b'IEND' not in end
    
-if __name__ == "__main__":
-    registration_service = Registration()
-    ds = registration_service.register_multiple_devices("/home/biodeep/alin/datasets/PRNU")
-    # ds = registration_service.register_device("../datasets/PRNU/camera_1/view_1", "camera_1")
-    # ds.save_to_disk(registration_service.config['output_database_dir'])
 
 
