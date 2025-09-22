@@ -14,11 +14,18 @@ from basicsr.models.network_unet import UNetRes
 import torch
 from tqdm import tqdm
 from prnu import extract_single_drunet, extract_single, aligned_cc, aligned_cc_torch
+from train import EmbeddingModel
 import prnu
 try:
     from yaml import CLoader as Loader
 except ImportError:
     from yaml import Loader
+
+
+def filter_dataset_by_view(dataset, view):
+    views = list(dataset['view'])
+    indices_select = [i for i, v in enumerate(views) if view in v]
+    return dataset.select(indices_select)
 
 
 def filter_dataset_by_resolution(dataset, resolution):
@@ -37,6 +44,14 @@ def filter_dataset_by_list_of_devices(dataset, device_list):
     mask = np.isin(devs, np.asarray(device_list))
     idx = np.nonzero(mask)[0].tolist()
     return ds.select(idx)
+
+
+def filter_dataset_by_list_of_devices_image_ds(dataset, device_list):
+    cols = set(dataset.column_names)
+    devs = np.asarray(dataset["device"])
+    mask = np.isin(devs, np.asarray(device_list))
+    idx = np.nonzero(mask)[0].tolist()
+    return dataset.select(idx)
 
 
 def _stack_prnu_fast(ds, flat_shape=None):
@@ -74,12 +89,12 @@ def _stack_prnu_fast(ds, flat_shape=None):
 class Comparison:
 
     def __init__(self):
-        with open("configs/registration.json", "r") as f:
+        with open("configs/config.json", "r") as f:
             self.config = json.load(f)
         self._create_denoiser()
-
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.registered_devices = load_from_disk(
-            self.config["output_database_dir"],
+            self.config["output_prnu_fingerprint"],
             keep_in_memory=False
         )
         keep_cols = [c for c in ["device_id", "resolutions", "prnu"] if c in self.registered_devices.column_names]
@@ -92,7 +107,7 @@ class Comparison:
         self.prnus_per_resolution = {r: filter_dataset_by_resolution(self.registered_devices, r) for r in unique_res}
 
         self.prnu_cache = {}
-        cache_root = os.path.join(self.config["output_database_dir"], "_prnu_cache")
+        cache_root = os.path.join(self.config["output_prnu_fingerprint"], "_prnu_cache")
         for r, ds_r in self.prnus_per_resolution.items():
             
             first = np.asarray(ds_r[0]["prnu"])
@@ -112,6 +127,13 @@ class Comparison:
             self.model = Restormer(**network_config['network_g'])
             weights_path = self.config['denoiser_path']
             self.model.load_state_dict(torch.load(weights_path)['params'])
+            self.comparison_models = {}
+            ckpts_path = os.path.dirname(self.config['denoiser_path'])
+            for resolution in self.config['resolutions']:
+                self.comparison_models[resolution] = EmbeddingModel(resolution)
+                self.comparison_models[resolution](torch.zeros(1, 1, resolution, resolution))
+                self.comparison_models[resolution].load_state_dict(torch.load(os.path.join(ckpts_path, f"model_{resolution}.pt")))
+                self.comparison_models[resolution].eval()
         else:
             self.model = UNetRes(in_nc=4, out_nc=3, nc=[64, 128, 256, 512], nb=4, act_mode='R',
                                  downsample_mode="strideconv", upsample_mode="convtranspose")
@@ -122,7 +144,7 @@ class Comparison:
 
     def device_comparison(self, image_paths, device_list=None, gt=None):
 
-        self.model.to("cuda")
+        self.model.to(self.device)
         device_dataset = {}
         for r, ds_r in self.prnus_per_resolution.items():
             device_dataset[r] = ds_r if device_list is None else filter_dataset_by_list_of_devices(ds_r, device_list)
@@ -132,7 +154,7 @@ class Comparison:
         
         for r in self.config['resolutions']:
             ds_r = device_dataset[r]
-
+            self.comparison_models[r].to(self.device)
             if device_list is None:
                 prnus = self.prnu_cache[r]
             else:
@@ -157,23 +179,43 @@ class Comparison:
 
             resolution_scores = []
             all_query_devices = []
-
+            prnus_torch = torch.from_numpy(prnus).unsqueeze(1).float()
             for images, gt_device in tqdm(dataloader):
                 if self.config.get('denoiser_type') == 'drunet':
                     t_align0 = time.time()
                     query_noise = extract_single_drunet(images, self.model, 50, 50)
                     t_align1 = time.time()
                     # print("Extract single", t_align1-t_align0)
+                    t_align0 = time.time()
+                    scores = aligned_cc_torch(query_noise, prnus)
+                    t_align1 = time.time()
+                    # print("Align cc", t_align1-t_align0)
+                    resolution_scores.append(scores['ncc'].T)
                 else:
+                    images = images/255.
                     query_noise = extract_single(images, self.model, 50, 50)
+                    queries = torch.from_numpy(query_noise).unsqueeze(1).float()
+                    
+                    similarities = torch.einsum("qchw,pchw->qpchw", queries, prnus_torch)
+                    size_q, size_p = similarities.shape[0], similarities.shape[1]
+                    similarities = rearrange(similarities, "q p c h w-> (q p) c h w").to(self.device)
+                    batch_size = self.config['batch_size_comparison']
+                    scores = []
+                    with torch.no_grad():
+                        for i in range(0, size_q*size_p, batch_size):
+                            batch = similarities[i:i+batch_size]
+                            scores.extend(self.comparison_models[r](batch).cpu().numpy().squeeze())
+                    model_scores = np.array(scores).squeeze()
+                    model_scores = rearrange(model_scores, '(q p)->q p', q=size_q, p=size_p).T
+
+                    raw_signal_scores = aligned_cc_torch(query_noise, prnus)['ncc'].T
+                    # print(model_scores.shape, raw_signal_scores.shape)
+                    # print((raw_signal_scores + model_scores).shape)
+                    resolution_scores.append(raw_signal_scores + model_scores)
                 
                 all_query_devices.extend(gt_device)
 
-                t_align0 = time.time()
-                scores = aligned_cc_torch(query_noise, prnus)
-                t_align1 = time.time()
-                # print("Align cc", t_align1-t_align0)
-                resolution_scores.append(scores['ncc'].T)
+                
 
             resolution_scores = np.concatenate(resolution_scores, axis=1)
             final_scores.append(resolution_scores)
@@ -205,7 +247,10 @@ class Comparison:
 if __name__ == "__main__":
     comparison = Comparison()
     t0 = time.time()
-    image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False).filter(lambda sample: "view_2" in sample['view'])
+    test_devices = np.load("test_devices.npy")[:2]
+    image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False)
+    image_dataset = filter_dataset_by_view(image_dataset, "view_2")
+    image_dataset = filter_dataset_by_list_of_devices_image_ds(image_dataset, list(test_devices))
     # print(len(image_dataset))
     # exit()
     gt_devices = list(image_dataset['device'])

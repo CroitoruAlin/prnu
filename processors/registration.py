@@ -70,6 +70,7 @@ class Registration():
             K = rgb2gray(K)
             K = zero_mean_total(K)
             K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
+            # torch.cuda.empty_cache()
             yield {"device_id": all_prnus_devices[0], "device_name": all_prnus_devices[0], 'resolutions': resolution, "prnu": K}
     
     def _create_dataset(self, image_paths, devices, persist=False):
@@ -130,8 +131,12 @@ class Registration():
             list_datasets_residuals = []
             for device in tqdm(unique_devices):
                 device_dataset = filter_dataset_by_device(dataset, device)
-                image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']]
-                devices = list(device_dataset['device'])
+                if self.config["no_samples_prnu_estimation"]!=-1:
+                    image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']][:self.config["no_samples_prnu_estimation"]]
+                    devices = list(device_dataset['device'])[:self.config["no_samples_prnu_estimation"]]
+                else:
+                    image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']]
+                    devices = list(device_dataset['device'])
                 list_datasets_fingerprint.append(self._create_dataset(image_paths, devices, persist=individual_persist))
             self._save_dataset(list_datasets_fingerprint, "output_prnu_fingerprint")
         self.model.to("cpu")
@@ -178,6 +183,8 @@ def is_png_truncated(filename):
         f.seek(-12, 2) 
         end = f.read()
         return b'IEND' not in end
-   
 
 
+
+register_processor = Registration()
+register_processor.register_multiple_devices("../datasets/PRNU")
