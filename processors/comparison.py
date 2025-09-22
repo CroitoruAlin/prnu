@@ -13,7 +13,7 @@ from basicsr.models.archs.restormer_arch import Restormer
 from basicsr.models.network_unet import UNetRes
 import torch
 from tqdm import tqdm
-from prnu import extract_single_drunet, extract_single, aligned_cc, aligned_cc_torch
+from prnu import extract_single_drunet, extract_single, aligned_cc, aligned_cc_torch, extract_single_classic
 from train import EmbeddingModel
 import prnu
 try:
@@ -134,17 +134,19 @@ class Comparison:
                 self.comparison_models[resolution](torch.zeros(1, 1, resolution, resolution))
                 self.comparison_models[resolution].load_state_dict(torch.load(os.path.join(ckpts_path, f"model_{resolution}.pt")))
                 self.comparison_models[resolution].eval()
-        else:
+        elif self.config.get("denoiser_type") == 'drunet':
             self.model = UNetRes(in_nc=4, out_nc=3, nc=[64, 128, 256, 512], nb=4, act_mode='R',
                                  downsample_mode="strideconv", upsample_mode="convtranspose")
             self.model.load_state_dict(torch.load(self.config['denoiser_path']), strict=True)
             self.model.eval()
             for _, v in self.model.named_parameters():
                 v.requires_grad = False
+        else:
+            self.model = None
 
     def device_comparison(self, image_paths, device_list=None, gt=None):
-
-        self.model.to(self.device)
+        if self.model is not None:
+            self.model.to(self.device)
         device_dataset = {}
         for r, ds_r in self.prnus_per_resolution.items():
             device_dataset[r] = ds_r if device_list is None else filter_dataset_by_list_of_devices(ds_r, device_list)
@@ -154,7 +156,8 @@ class Comparison:
         
         for r in self.config['resolutions']:
             ds_r = device_dataset[r]
-            self.comparison_models[r].to(self.device)
+            if self.config.get('denoiser_type') == 'restormer':
+                self.comparison_models[r].to(self.device)
             if device_list is None:
                 prnus = self.prnu_cache[r]
             else:
@@ -191,7 +194,7 @@ class Comparison:
                     t_align1 = time.time()
                     # print("Align cc", t_align1-t_align0)
                     resolution_scores.append(scores['ncc'].T)
-                else:
+                elif self.config.get("denoiser_type") == "restormer":
                     images = images/255.
                     query_noise = extract_single(images, self.model, 50, 50)
                     queries = torch.from_numpy(query_noise).unsqueeze(1).float()
@@ -212,7 +215,14 @@ class Comparison:
                     # print(model_scores.shape, raw_signal_scores.shape)
                     # print((raw_signal_scores + model_scores).shape)
                     resolution_scores.append(raw_signal_scores + model_scores)
-                
+                else:
+                    queries = []
+                    for image in images.cpu().numpy():
+                        residual = extract_single_classic(image)
+                        queries.append(residual)
+                    queries = np.array(queries)
+                    scores = aligned_cc_torch(queries, prnus)
+                    resolution_scores.append(scores['ncc'].T)
                 all_query_devices.extend(gt_device)
 
                 
@@ -240,7 +250,8 @@ class Comparison:
             print("Top 1 accuracy", stats_cc["top-1-acc"])
             print("Top 5 accuracy", stats_cc["top-5-acc"])
             print('EER {:.5f}'.format(stats_cc['eer']))
-        self.model.to("cpu")
+        if self.model is not None:
+            self.model.to("cpu")
         return final_scores
 
 

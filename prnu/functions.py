@@ -40,7 +40,8 @@ def noise_extract_restomer(im: np.ndarray, model=None, levels: int = 100, sigma:
     noise = (im-restored)*255
     return noise.numpy()
 
-
+remove_zero_m = True
+remove_wiener = True
 
 # Performs the noise extraction operation via the DRUNET network.
 def noise_extract_drunet(im: np.ndarray, model=None, levels: int = 100, sigma: int = 100) -> np.ndarray:
@@ -936,3 +937,165 @@ def gt(l1: list or np.ndarray, l2: list or np.ndarray) -> np.ndarray:
         gt_arr[l1idx, l2 == l1sample] = True
 
     return gt_arr
+
+def extract_multiple_aligned_classic(imgs: list, levels: int = 4, sigma: float = 5, processes: int = 6,
+                             batch_size=1, tqdm_str: str = '') -> np.ndarray:
+
+    """
+    Extract PRNU from a list of images. Images are supposed to be the same size and properly oriented
+    :param tqdm_str: tqdm description (see tqdm documentation)
+    :param batch_size: number of parallel processed images
+    :param processes: number of parallel processes
+    :param imgs: list of images of size (H,W,Ch) and type np.uint8
+    :param levels: number of wavelet decomposition levels
+    :param sigma: estimated noise power
+    :return: PRNU
+    """
+    assert (isinstance(imgs[0], np.ndarray))
+    assert (imgs[0].ndim == 3)
+    assert (imgs[0].dtype == np.uint8)
+
+    h, w, ch = imgs[0].shape
+
+    RPsum = np.zeros((h, w, ch), np.float32)
+    NN = np.zeros((h, w, ch), np.float32)
+
+    if processes is None or processes > 1:
+        args_list = []
+        for im in imgs:
+            args_list += [(im, levels, sigma)]
+        pool = Pool(processes=10)
+
+        for batch_idx0 in tqdm(np.arange(start=0, step=batch_size, stop=len(imgs)), disable=tqdm_str == '',
+                               desc=(tqdm_str + ' (1/2)'), dynamic_ncols=True):
+            nni = pool.map(inten_sat_compact, args_list[batch_idx0:batch_idx0 + batch_size])
+            for ni in nni:
+                NN += ni
+            del nni
+
+        for batch_idx0 in tqdm(np.arange(start=0, step=batch_size, stop=len(imgs)), disable=tqdm_str == '',
+                               desc=(tqdm_str + ' (2/2)'), dynamic_ncols=True):
+
+            wi_list = pool.map(noise_extract_compact_classic, args_list[batch_idx0:batch_idx0 + batch_size])
+            for wi in wi_list:
+                RPsum += wi
+            del wi_list
+
+        pool.close()
+
+    else:
+        for im in tqdm(imgs, disable=tqdm_str is None, desc=tqdm_str, dynamic_ncols=True):
+            RPsum += noise_extract_compact((im, levels, sigma))
+            NN += (inten_scale(im) * saturation(im)) ** 2
+
+    K = RPsum / (NN + 1)
+    K = rgb2gray(K)
+    if not remove_zero_m:
+        K = zero_mean_total(K)
+    if not remove_wiener:
+        K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
+
+    return K
+def noise_extract_compact_classic(args):
+    """
+    Extract residual, multiplied by the image. Useful to save memory in multiprocessing operations
+    :param args: (im, levels, sigma), see noise_extract for usage
+    :return: residual, multiplied by the image
+    """
+
+
+    w = noise_extract_classic(*args)
+ 
+
+    im = args[0]
+
+    return (w * im / 255.).astype(np.float32)
+
+def noise_extract_classic(im: np.ndarray, levels: int = 4, sigma: float = 5) -> np.ndarray:
+    """
+    NoiseExtract as from Binghamton toolbox.
+
+    :param im: grayscale or color image, np.uint8
+    :param levels: number of wavelet decomposition levels
+    :param sigma: estimated noise power
+    :return: noise residual
+    """
+
+    assert (im.dtype == np.uint8)
+    assert (im.ndim in [2, 3])
+
+    im = im.astype(np.float32)
+
+    noise_var = sigma ** 2
+
+    if im.ndim == 2:
+        im.shape += (1,)
+
+    W = np.zeros(im.shape, np.float32)
+
+    for ch in range(im.shape[2]):
+
+        wlet = None
+        while wlet is None and levels > 0:
+            try:
+                wlet = pywt.wavedec2(im[:, :, ch], 'db4', level=levels)
+            except ValueError:
+                levels -= 1
+                wlet = None
+        if wlet is None:
+            raise ValueError('Impossible to compute Wavelet filtering for input size: {}'.format(im.shape))
+
+        wlet_details = wlet[1:]
+
+        wlet_details_filter = [None] * len(wlet_details)
+        # Cycle over Wavelet levels 1:levels-1
+        for wlet_level_idx, wlet_level in enumerate(wlet_details):
+            # Cycle over H,V,D components
+            level_coeff_filt = [None] * 3
+            for wlet_coeff_idx, wlet_coeff in enumerate(wlet_level):
+                level_coeff_filt[wlet_coeff_idx] = wiener_adaptive(wlet_coeff, noise_var)
+            wlet_details_filter[wlet_level_idx] = tuple(level_coeff_filt)
+
+        # Set filtered detail coefficients for Levels > 0 ---
+        wlet[1:] = wlet_details_filter
+
+        # Set to 0 all Level 0 approximation coefficients ---
+        wlet[0][...] = 0
+
+        # Invert wavelet transform ---
+        wrec = pywt.waverec2(wlet, 'db4')
+        try:
+            W[:, :, ch] = wrec
+        except ValueError:
+            W = np.zeros(wrec.shape[:2] + (im.shape[2],), np.float32)
+            W[:, :, ch] = wrec
+
+    if W.shape[2] == 1:
+        W.shape = W.shape[:2]
+
+    W = W[:im.shape[0], :im.shape[1]]
+
+    return W
+
+def extract_single_classic(im: np.ndarray,
+                   levels: int = 4,
+                   sigma: float = 5,
+                   wdft_sigma: float = 0) -> np.ndarray:
+    """
+    Extract noise residual from a single image
+    :param im: grayscale or color image, np.uint8
+    :param levels: number of wavelet decomposition levels
+    :param sigma: estimated noise power
+    :param wdft_sigma: estimated DFT noise power
+    :return: noise residual
+    """
+    W = noise_extract_classic(im, levels, sigma)
+
+    W = rgb2gray(W)
+    if not remove_zero_m:
+        W = zero_mean_total(W)
+    W_std = W.std(ddof=1) if wdft_sigma == 0 else wdft_sigma
+    if not remove_wiener:
+        W = wiener_dft(W, W_std).astype(np.float32)
+
+    return W

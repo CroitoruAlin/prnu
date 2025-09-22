@@ -1,5 +1,6 @@
 import  prnu
-from prnu.functions import extract_single, model_creation, noise_extract_compact, rgb2gray, wiener_dft, zero_mean_total, noise_extract_compact_drunet
+from prnu.functions import extract_single, model_creation, noise_extract_compact, rgb2gray, wiener_dft, zero_mean_total, noise_extract_compact_drunet, \
+extract_multiple_aligned_classic
 from tqdm import tqdm
 import argparse
 import os
@@ -37,13 +38,15 @@ class Registration():
             self.model = Restormer(**network_config['network_g'])
             weights_path = self.config['denoiser_path']
             self.model.load_state_dict(torch.load(weights_path)['params'])
-        else:
+        elif self.config['denoiser_type'] == 'restormer':
             self.model = UNetRes(in_nc=4, out_nc=3, nc=[64, 128, 256, 512], nb=4, act_mode='R',
                     downsample_mode="strideconv", upsample_mode="convtranspose")
             self.model.load_state_dict(torch.load(self.config['denoiser_path']), strict=True)
             self.model.eval()
             for k, v in self.model.named_parameters():
                 v.requires_grad = False
+        else:
+            self.model = None
 
 
     def _prnu_extraction(self, image_paths, devices):
@@ -61,15 +64,24 @@ class Registration():
                         normalized_images=images/255.
                         noise_estimated = noise_extract_compact((normalized_images, self.model, 50, 50))
                         noises.extend(noise_estimated/255.)
-                    else:
+                    elif self.config['denoiser_type'] == 'drunet':
                         noise_estimated = noise_extract_compact_drunet((images, self.model, 50,50))
                         noises.extend(noise_estimated.cpu().numpy()/255.)
+                    else:
+                        noises.extend(images.cpu().numpy())
+
                 all_prnus_devices.extend(device_name)
-            
-            K = np.array(noises).mean(axis=0)
-            K = rgb2gray(K)
-            K = zero_mean_total(K)
-            K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
+            if self.config['denoiser_type']!='classic':
+                K = np.array(noises).mean(axis=0)
+                K = rgb2gray(K)
+                K = zero_mean_total(K)
+                K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
+            else:
+                noises = np.array(noises)
+                # print(noises.shape)
+                noise_estimated = extract_multiple_aligned_classic(noises)
+                K = noise_estimated
+                # print(K.shape)
             # torch.cuda.empty_cache()
             yield {"device_id": all_prnus_devices[0], "device_name": all_prnus_devices[0], 'resolutions': resolution, "prnu": K}
     
@@ -122,7 +134,8 @@ class Registration():
 
    
     def register_multiple_devices(self, root_folder_devices, individual_persist = False):
-        self.model.to("cuda")
+        if self.model is not None:
+            self.model.to("cuda")
         if is_hf_dataset_dir(root_folder_devices):
             dataset = load_from_disk(root_folder_devices)
             dataset = filter_dataset_for_prnu_estimation(dataset)
@@ -139,7 +152,8 @@ class Registration():
                     devices = list(device_dataset['device'])
                 list_datasets_fingerprint.append(self._create_dataset(image_paths, devices, persist=individual_persist))
             self._save_dataset(list_datasets_fingerprint, "output_prnu_fingerprint")
-        self.model.to("cpu")
+        if self.model is not None:
+            self.model.to("cpu")
         
     def _save_dataset(self, list_datasets, path_key="output_prnu_fingerprint"):
         if not os.path.exists(self.config[path_key]):
