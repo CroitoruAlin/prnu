@@ -35,8 +35,20 @@ def filter_dataset_by_resolution(dataset, resolution):
     idx = np.nonzero(np.asarray(ds["resolutions"]) == resolution)[0].tolist()
     return ds.select(idx)
 
+def remove_samples_from_ds_by_devices(dataset, device_list):
+    if device_list is None:
+        return dataset
+    cols = set(dataset.column_names)
+    keep_cols = [c for c in ["device_id", "resolutions", "prnu"] if c in cols]
+    ds = dataset.remove_columns([c for c in cols if c not in keep_cols])
+    devs = np.asarray(ds["device_id"])
+    mask = np.invert(np.isin(devs, np.asarray(device_list)))
+    idx = np.nonzero(mask)[0].tolist()
+    return ds.select(idx)
 
 def filter_dataset_by_list_of_devices(dataset, device_list):
+    if device_list is None:
+        return dataset
     cols = set(dataset.column_names)
     keep_cols = [c for c in ["device_id", "resolutions", "prnu"] if c in cols]
     ds = dataset.remove_columns([c for c in cols if c not in keep_cols])
@@ -85,10 +97,18 @@ def _stack_prnu_fast(ds, flat_shape=None):
         prnus = np.stack(ds_np["prnu"], axis=0)
     return prnus, ds['device_id']
 
-
+def normalize(batch):
+    batch_flat = batch.view(batch.size(0), -1) 
+    print(batch_flat.shape)                 # (B, C*H*W)
+    batch_norm = F.normalize(batch_flat, p=2, dim=1)  
+    # norm = torch.norm(batch.view(batch.size(0), -1) , p=2, dim=1)
+    # maxx = torch.amax(batch)
+    # print(norm, maxx)
+    batch_norm = batch_norm.view_as(batch)
+    return batch_norm
 class Comparison:
 
-    def __init__(self):
+    def __init__(self, exclude_devices = None):
         with open("configs/config.json", "r") as f:
             self.config = json.load(f)
         self._create_denoiser()
@@ -97,6 +117,8 @@ class Comparison:
             self.config["output_prnu_fingerprint"],
             keep_in_memory=False
         )
+        # print(set(self.registered_devices['device_id']))
+        self.registered_devices = remove_samples_from_ds_by_devices(self.registered_devices, exclude_devices)
         keep_cols = [c for c in ["device_id", "resolutions", "prnu"] if c in self.registered_devices.column_names]
         drop_cols = [c for c in self.registered_devices.column_names if c not in keep_cols]
         if drop_cols:
@@ -183,16 +205,19 @@ class Comparison:
             resolution_scores = []
             all_query_devices = []
             prnus_torch = torch.from_numpy(prnus).unsqueeze(1).float()
-            for images, gt_device in tqdm(dataloader):
+            for images, gt_device, _, _ in tqdm(dataloader):
                 if self.config.get('denoiser_type') == 'drunet':
                     t_align0 = time.time()
                     query_noise = extract_single_drunet(images, self.model, 50, 50)
                     t_align1 = time.time()
                     # print("Extract single", t_align1-t_align0)
                     t_align0 = time.time()
+                    # print("Query", query_noise.max(), query_noise.min())
+                    # print("PRNU", prnus.max(), prnus.min())
                     scores = aligned_cc_torch(query_noise, prnus)
                     t_align1 = time.time()
                     # print("Align cc", t_align1-t_align0)
+                    # print(scores['ncc'].shape)
                     resolution_scores.append(scores['ncc'].T)
                 elif self.config.get("denoiser_type") == "restormer":
                     images = images/255.
@@ -207,14 +232,16 @@ class Comparison:
                     with torch.no_grad():
                         for i in range(0, size_q*size_p, batch_size):
                             batch = similarities[i:i+batch_size]
-                            scores.extend(self.comparison_models[r](batch).cpu().numpy().squeeze())
+                            batch_sum = batch.sum((1,2,3))
+                            scores.extend(torch.sigmoid(self.comparison_models[r](batch)).cpu().numpy().squeeze()+batch_sum.cpu().numpy())
                     model_scores = np.array(scores).squeeze()
                     model_scores = rearrange(model_scores, '(q p)->q p', q=size_q, p=size_p).T
 
-                    raw_signal_scores = aligned_cc_torch(query_noise, prnus)['ncc'].T
+                    # raw_signal_scores = aligned_cc_torch(query_noise, prnus)['ncc'].T
                     # print(model_scores.shape, raw_signal_scores.shape)
                     # print((raw_signal_scores + model_scores).shape)
-                    resolution_scores.append(raw_signal_scores + model_scores)
+                    # resolution_scores.append(raw_signal_scores + model_scores)
+                    resolution_scores.append(model_scores)
                 else:
                     queries = []
                     for image in images.cpu().numpy():
@@ -239,12 +266,21 @@ class Comparison:
         weights = weights / weights.max()
         final_scores = np.stack(final_scores, axis=0)
         final_scores = np.sum(final_scores * weights[:, None, None], axis=0)
-        # print(final_scores.shape)
+        scores_threshold_comparison = np.max(final_scores, axis=0)
+        results_threshold_comparison = []
+        for value in scores_threshold_comparison:
+            if value < self.config['thresholds'][self.config['denoiser_type']]['threshold_fake']:
+                results_threshold_comparison.append("fake")
+            elif value >= self.config['thresholds'][self.config['denoiser_type']]['threshold_fake'] and value < self.config['thresholds'][self.config['denoiser_type']]['threshold_set']:
+                results_threshold_comparison.append("not registered")
+            else:
+                results_threshold_comparison.append("real")
         if gt is not None:
             all_query_devices = np.array(all_query_devices)
             unique_devices = self.devices
             gt_bin = prnu.gt(unique_devices, all_query_devices)
             print(final_scores.shape, gt_bin.shape)
+            # prnu.plot_roc_curve(final_scores, gt_bin)
             stats_cc = prnu.stats(final_scores, gt_bin)
             print('AUC on CC {:.5f}'.format(stats_cc['auc']))
             print("Top 1 accuracy", stats_cc["top-1-acc"])
@@ -252,23 +288,58 @@ class Comparison:
             print('EER {:.5f}'.format(stats_cc['eer']))
         if self.model is not None:
             self.model.to("cpu")
-        return final_scores
+        return final_scores, results_threshold_comparison
 
 
 if __name__ == "__main__":
-    comparison = Comparison()
-    t0 = time.time()
-    test_devices = np.load("test_devices.npy")[:2]
-    image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False)
-    image_dataset = filter_dataset_by_view(image_dataset, "view_2")
-    image_dataset = filter_dataset_by_list_of_devices_image_ds(image_dataset, list(test_devices))
-    # print(len(image_dataset))
-    # exit()
-    gt_devices = list(image_dataset['device'])
-    image_paths = [os.path.join("../datasets/PRNU/", image_path) for image_path in list(image_dataset['image_path'])]
-    scores = comparison.device_comparison(image_paths, gt=gt_devices)
-    # print(scores.shape, scores)
-    print("Total time:", time.time() - t0)
+    import wandb
+    import os
+    import random
+    from sklearn.metrics import roc_curve, auc
+    comparison = Comparison(exclude_devices=None)
+    wandb.init(project="PRNU comparison", 
+               config=comparison.config)
+    root_images = "../datasets/perturbed_images"
+    image_list = []
+    for device in os.listdir(root_images):
+        device_path = os.path.join(root_images, device)
+        for image_name in os.listdir(device_path):
+            image_path = os.path.join(device_path, image_name)
+            image_list.append(image_path)
+    random.shuffle(image_list)
+    scores, results = comparison.device_comparison(image_list[:100])
+    print(results)
+    # # print(np.unique(scores))
+    # scores = scores.max(axis=0)
+    # # print(np.unique(scores))
+    # gt = np.zeros(scores.shape)
+    # fpr, tpr, th = roc_curve(gt.flatten(), scores.flatten(), drop_intermediate=False)
+    
+    # for i, f in enumerate(fpr):
+    #     wandb.log({"fpr":f, "threshold":th[i]})
+    # test_devices = np.load("test_devices.npy")[:2]
+    # comparison = Comparison(exclude_devices=None)
+   
+    # image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False)
+    # image_dataset = filter_dataset_by_view(image_dataset, "view_2")
+    # image_dataset = filter_dataset_by_list_of_devices_image_ds(image_dataset, test_devices)
+    # # # # # # # # # print(len(image_dataset))
+    # # # # # # # # # exit()
+    # gt_devices = list(image_dataset['device'])
+    # image_paths = sorted([os.path.join("../datasets/PRNU/", image_path) for image_path in list(image_dataset['image_path'])])
+    # random.shuffle(image_paths)
+    # scores, results = comparison.device_comparison(image_paths[:100])
+    # print(results)
+    # # print(scores.shape, scores)
+    # print("Total time:", time.time() - t0)
+    # prnus = load_from_disk("/home/biodeep/alin/prnu/prnu_signals_1400")
+    # prnus = filter_dataset_by_list_of_devices(filter_dataset_by_resolution(load_from_disk("/home/biodeep/alin/prnu/registered_devices_restormer"), 1400), ["camera_1"])
+    # prnus_2 = filter_dataset_by_list_of_devices(load_from_disk("prnu_signals_1400"), ["camera_1"])
+    # prnu_1 = np.array(prnus['prnu'])
+    # prnu_2 = np.array(prnus_2['prnu']).flatten()
+    # print(prnu_1.shape)
+    # prnu_1 = prnu_1.flatten()
+    # print(prnu_1[:20], prnu_2[:20])
 
 #[[-0.03390784 -0.00919679 -0.05382158 -0.03892823 -0.00190165]
 # [ 0.03498485 -0.03103287 -0.05388374 -0.00126721 -0.04313271]

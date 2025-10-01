@@ -238,7 +238,7 @@ def uint2tensor3(img):
 def tensor2uint(img):
     img = img.data.squeeze().float().clamp_(0, 1).cpu().numpy()
     if img.ndim == 3:
-        img = np.transpose(img, (1, 2, 0))
+        img = np.expand_dims(np.transpose(img, (1, 2, 0)), axis =0)
     else:
         img = rearrange(img, "b c h w-> b h w c")
     return np.uint8((img*255.0).round())

@@ -15,6 +15,7 @@ from datasets import Dataset, Value, Sequence, Features, concatenate_datasets, l
 from processors.dataset import DeviceRegistrationDataset
 import json
 import yaml
+import random
 try:
     from yaml import CLoader as Loader
 except ImportError:
@@ -38,7 +39,7 @@ class Registration():
             self.model = Restormer(**network_config['network_g'])
             weights_path = self.config['denoiser_path']
             self.model.load_state_dict(torch.load(weights_path)['params'])
-        elif self.config['denoiser_type'] == 'restormer':
+        elif self.config['denoiser_type'] == 'drunet':
             self.model = UNetRes(in_nc=4, out_nc=3, nc=[64, 128, 256, 512], nb=4, act_mode='R',
                     downsample_mode="strideconv", upsample_mode="convtranspose")
             self.model.load_state_dict(torch.load(self.config['denoiser_path']), strict=True)
@@ -58,24 +59,48 @@ class Registration():
         for resolution, dataloader in dataloaders.items():
             noises = []
             all_prnus_devices = []
-            for images, device_name in  dataloader:
+            scales = []
+            for images, device_name, inten_scale, saturation in  dataloader:
                 with torch.no_grad():
                     if self.config['denoiser_type'] == 'restormer':
                         normalized_images=images/255.
                         noise_estimated = noise_extract_compact((normalized_images, self.model, 50, 50))
                         noises.extend(noise_estimated/255.)
                     elif self.config['denoiser_type'] == 'drunet':
-                        noise_estimated = noise_extract_compact_drunet((images, self.model, 50,50))
+                        noise_estimated = noise_extract_compact_drunet((images, self.model, 50, 50))
                         noises.extend(noise_estimated.cpu().numpy()/255.)
+                        scales.extend(((inten_scale * saturation) ** 2).cpu().numpy())
                     else:
                         noises.extend(images.cpu().numpy())
 
                 all_prnus_devices.extend(device_name)
-            if self.config['denoiser_type']!='classic':
-                K = np.array(noises).mean(axis=0)
+            if self.config['denoiser_type']=='restormer':
+                RPsum = np.zeros(noises[0].shape, np.float32)
+                for noise in noises:    
+                    RPsum += noise
+                noises = np.array(noises)
+                K = RPsum / len(noises)
                 K = rgb2gray(K)
                 K = zero_mean_total(K)
                 K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
+            elif self.config['denoiser_type'] == "drunet":
+                RPsum = np.zeros(noises[0].shape, np.float32)
+                NN = np.zeros(noises[0].shape, np.float32)
+                for noise in noises:    
+                    RPsum += noise
+                # for scale in scales:
+                #     NN += scale
+                print(len(noises), len(scales))
+                # print(NN.min(), NN.max())
+                print(RPsum.max(), RPsum.min())
+                K = RPsum / len(noises)
+                print(K.max(), K.min())
+                K = rgb2gray(K)
+                print(K.max(), K.min())            
+                K = zero_mean_total(K)
+                print(K.max(), K.min())
+                K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
+                print(K.max(), K.min())
             else:
                 noises = np.array(noises)
                 # print(noises.shape)
@@ -144,11 +169,14 @@ class Registration():
             list_datasets_residuals = []
             for device in tqdm(unique_devices):
                 device_dataset = filter_dataset_by_device(dataset, device)
+                # print(len(device_dataset['device']))
                 if self.config["no_samples_prnu_estimation"]!=-1:
-                    image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']][:self.config["no_samples_prnu_estimation"]]
-                    devices = list(device_dataset['device'])[:self.config["no_samples_prnu_estimation"]]
+                    image_paths = sorted([os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']])#[:self.config["no_samples_prnu_estimation"]]
+                    
+                    image_paths = image_paths[:self.config["no_samples_prnu_estimation"]]
+                    devices = [device] * len(image_paths)
                 else:
-                    image_paths = [os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']]
+                    image_paths = sorted([os.path.join(root_folder_devices, image_path) for image_path in device_dataset['image_path']])
                     devices = list(device_dataset['device'])
                 list_datasets_fingerprint.append(self._create_dataset(image_paths, devices, persist=individual_persist))
             self._save_dataset(list_datasets_fingerprint, "output_prnu_fingerprint")
@@ -201,4 +229,5 @@ def is_png_truncated(filename):
 
 
 register_processor = Registration()
-register_processor.register_multiple_devices("../datasets/PRNU")
+ds = register_processor.register_multiple_devices("../datasets/PRNU")
+ds.save_to_disk(register_processor.config["output_prnu_fingerprint"])

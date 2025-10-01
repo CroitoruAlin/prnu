@@ -5,7 +5,7 @@ from torchvision.transforms import Pad
 import prnu
 from tqdm import tqdm
 from datasets import load_from_disk
-
+from prnu.functions import inten_scale, saturation
 
 class DeviceRegistrationDataset(Dataset):
 
@@ -34,7 +34,9 @@ class DeviceRegistrationDataset(Dataset):
         image = image.resize((self.resolution, self.resolution))
         image = np.array(image).astype(np.uint8)
 
-        return image, device
+        inten_scale_img = inten_scale(image)
+        saturation_img = saturation(image).astype(bool)
+        return image, device, inten_scale_img, saturation_img
 
 
 def filter_ds(ds, used_device):

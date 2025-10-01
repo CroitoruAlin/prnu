@@ -20,6 +20,7 @@ from einops import rearrange
 from utils import utils_image as util
 from utils import utils_model
 import time
+from PIL import Image
 class ArgumentError(Exception):
     pass
 
@@ -88,6 +89,8 @@ def noise_extract_drunet(im: np.ndarray, model=None, levels: int = 100, sigma: i
         img_E = utils_model.test_mode(model, img_L, mode=3)
 
     img_E = util.tensor2uint(img_E)
+    # print(img_E.shape, img_H.shape, img_L.shape)
+    Image.fromarray(img_E[0]).save("denoised_image.png")
     noise = img_H - img_E
 
     return noise
@@ -150,7 +153,7 @@ def extract_single(im: np.ndarray,
             result[i] = wiener_dft(result[i], W_std).astype(np.float32)
         W=result
     else:
-        W = rgb2gray(W)
+        W = rgb2gray(W/255.)
         W = zero_mean_total(W)
         W_std = W.std(ddof=1) if wdft_sigma == 0 else wdft_sigma
         W = wiener_dft(W, W_std).astype(np.float32)
@@ -180,6 +183,7 @@ def extract_single_drunet(im: np.ndarray,
     end_time = time.time()
     # print("noise extraction", end_time-start_time)
     result = np.zeros(W.shape[:3])
+    # print(result.shape, W.shape)
     if len(W.shape)>3:
         # W = rgb2gray_batched(W)
         # W = zero_mean_total_batched(W)
@@ -196,7 +200,7 @@ def extract_single_drunet(im: np.ndarray,
         # print(W.max(), W.min())
 
     else:
-        W = rgb2gray(W)
+        W = rgb2gray(W/255.)
         W = zero_mean_total(W)
         W_std = W.std(ddof=1) if wdft_sigma == 0 else wdft_sigma
         W = wiener_dft(W, W_std).astype(np.float32)
@@ -677,11 +681,10 @@ def inten_scale(im: np.ndarray) -> np.ndarray:
 
     T = 252
     v = 6
-    # print(im.shape)
-    out = np.exp(-1 * (im.astype(int) - T) ** 2 / v)
+    out = np.exp(-1 * (im.astype(float) - T) ** 2 / v)
     out[im < T] = im[im < T] / T
-    # print(out.shape)
-    return out.astype(np.uint8)
+
+    return out
 
 
 def saturation(im: np.ndarray) -> np.ndarray:
@@ -878,11 +881,13 @@ def top_k_accuracy(y_true, y_pred, k=1):
     """
     # Get the indices of the top k predictions
     top_k_preds = np.argsort(y_pred, axis=1)[:, -k:][:, ::-1]  # shape: [N, k], descending order
-    # print(np.sort(y_pred, axis=1)[:, -k:][:, ::-1])
+    # print(np.max(np.sort(y_pred, axis=1)[:, -k:][:, ::-1]))
+    # print(np.min(np.sort(y_pred, axis=1)[:, -k:][:, ::-1]))
     # For Top-1: k=1, for Top-5: k=5
     match_array = [y_true[i] in top_k_preds[i] for i in range(len(y_true))]
     return np.mean(match_array)
 
+import wandb
 def stats(cc: np.ndarray, gt: np.ndarray, ) -> dict:
     """
     Compute statistics
@@ -900,7 +905,8 @@ def stats(cc: np.ndarray, gt: np.ndarray, ) -> dict:
     top_5_acc = top_k_accuracy(np.argmax(gt, axis=0), cc.T, k=5)
     fpr, tpr, th = roc_curve(gt.flatten(), cc.flatten())
     auc_score = auc(fpr, tpr)
-
+    for i, f in enumerate(fpr):
+        wandb.log({"fpr":f, "tpr":tpr[i], "threshold":th[i]})
     # EER
     eer_idx = np.argmin((fpr - (1 - tpr)) ** 2, axis=0)
     eer = float(fpr[eer_idx])
@@ -1099,3 +1105,25 @@ def extract_single_classic(im: np.ndarray,
         W = wiener_dft(W, W_std).astype(np.float32)
 
     return W
+
+import matplotlib.pyplot as plt
+def plot_roc_curve(scores, gt):
+    fpr, tpr, thresholds = roc_curve(gt.flatten(), scores.flatten())
+    roc_auc = auc(fpr, tpr)
+
+    # Plot ROC curve
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, label=f"ROC curve (AUC = {roc_auc:.2f})")
+    plt.plot([0, 1], [0, 1], "k--", label="Random Guess")
+
+    # Add thresholds to the plot
+    for i, thr in enumerate(thresholds):
+        if i % 50 == 0:  # skip some labels for clarity
+            plt.text(fpr[i], tpr[i], f"{thr:.6f}", fontsize=8)
+
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve with Thresholds")
+    plt.legend(loc="lower right")
+    plt.grid()
+    plt.savefig("ROC_Curve.png")
