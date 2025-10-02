@@ -233,7 +233,7 @@ class Comparison:
                         for i in range(0, size_q*size_p, batch_size):
                             batch = similarities[i:i+batch_size]
                             batch_sum = batch.sum((1,2,3))
-                            scores.extend(torch.sigmoid(self.comparison_models[r](batch)).cpu().numpy().squeeze()+batch_sum.cpu().numpy())
+                            scores.extend(self.comparison_models[r](batch).cpu().numpy().squeeze()+batch_sum.cpu().numpy())
                     model_scores = np.array(scores).squeeze()
                     model_scores = rearrange(model_scores, '(q p)->q p', q=size_q, p=size_p).T
 
@@ -317,9 +317,10 @@ if __name__ == "__main__":
     
     # for i, f in enumerate(fpr):
     #     wandb.log({"fpr":f, "threshold":th[i]})
-    # test_devices = np.load("test_devices.npy")[:2]
+    # test_devices = np.load("test_devices.npy")
     # comparison = Comparison(exclude_devices=None)
-   
+    # wandb.init(project="PRNU comparison", 
+    #            config=comparison.config)
     # image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False)
     # image_dataset = filter_dataset_by_view(image_dataset, "view_2")
     # image_dataset = filter_dataset_by_list_of_devices_image_ds(image_dataset, test_devices)
@@ -329,6 +330,12 @@ if __name__ == "__main__":
     # image_paths = sorted([os.path.join("../datasets/PRNU/", image_path) for image_path in list(image_dataset['image_path'])])
     # random.shuffle(image_paths)
     # scores, results = comparison.device_comparison(image_paths[:100])
+    # scores = scores.max(axis=0)
+    # gt = np.ones(scores.shape)
+    # fpr, tpr, th = roc_curve(gt.flatten(), scores.flatten(), drop_intermediate=False)
+    
+    # for i, f in enumerate(tpr):
+        # wandb.log({"tpr":f, "threshold":th[i]})
     # print(results)
     # # print(scores.shape, scores)
     # print("Total time:", time.time() - t0)
