@@ -299,16 +299,16 @@ if __name__ == "__main__":
     comparison = Comparison(exclude_devices=None)
     wandb.init(project="PRNU comparison", 
                config=comparison.config)
-    root_images = "../datasets/perturbed_images"
-    image_list = []
-    for device in os.listdir(root_images):
-        device_path = os.path.join(root_images, device)
-        for image_name in os.listdir(device_path):
-            image_path = os.path.join(device_path, image_name)
-            image_list.append(image_path)
-    random.shuffle(image_list)
-    scores, results = comparison.device_comparison(image_list[:100])
-    print(results)
+    # root_images = "../datasets/perturbed_images"
+    # image_list = []
+    # for device in os.listdir(root_images):
+    #     device_path = os.path.join(root_images, device)
+    #     for image_name in os.listdir(device_path):
+    #         image_path = os.path.join(device_path, image_name)
+    #         image_list.append(image_path)
+    # random.shuffle(image_list)
+    # scores, results = comparison.device_comparison(image_list[:100])
+    # print(results)
     # # print(np.unique(scores))
     # scores = scores.max(axis=0)
     # # print(np.unique(scores))
@@ -317,19 +317,19 @@ if __name__ == "__main__":
     
     # for i, f in enumerate(fpr):
     #     wandb.log({"fpr":f, "threshold":th[i]})
-    # test_devices = np.load("test_devices.npy")
+    test_devices = np.load("test_devices.npy")[:2]
     # comparison = Comparison(exclude_devices=None)
     # wandb.init(project="PRNU comparison", 
     #            config=comparison.config)
-    # image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False)
-    # image_dataset = filter_dataset_by_view(image_dataset, "view_2")
-    # image_dataset = filter_dataset_by_list_of_devices_image_ds(image_dataset, test_devices)
+    image_dataset = load_from_disk("../datasets/PRNU/", keep_in_memory=False)
+    image_dataset = filter_dataset_by_view(image_dataset, "view_2")
+    image_dataset = filter_dataset_by_list_of_devices_image_ds(image_dataset, test_devices)
     # # # # # # # # # print(len(image_dataset))
     # # # # # # # # # exit()
-    # gt_devices = list(image_dataset['device'])
-    # image_paths = sorted([os.path.join("../datasets/PRNU/", image_path) for image_path in list(image_dataset['image_path'])])
+    gt_devices = list(image_dataset['device'])
+    image_paths = sorted([os.path.join("../datasets/PRNU/", image_path) for image_path in list(image_dataset['image_path'])])
     # random.shuffle(image_paths)
-    # scores, results = comparison.device_comparison(image_paths[:100])
+    scores, results = comparison.device_comparison(image_paths, gt=gt_devices)
     # scores = scores.max(axis=0)
     # gt = np.ones(scores.shape)
     # fpr, tpr, th = roc_curve(gt.flatten(), scores.flatten(), drop_intermediate=False)
