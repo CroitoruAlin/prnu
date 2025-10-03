@@ -3,12 +3,12 @@
     "data_path": "../datasets/PRNU",
     "train_devices": "train_devices.npy",
     "test_devices": "test_devices.npy",
-    "denoiser_type": "classic",
+    "denoiser_type": "restormer",
     "no_samples_prnu_estimation": 5,
     "resolutions": [1400, 1024],
-    "batch_size": 5,
+    "batch_size": 1,
     "batch_size_comparison": 8,
-    "output_prnu_fingerprint": "registered_devices_classic",
+    "output_prnu_fingerprint": "registered_devices_restormer",
     "output_training_queries": "training_queries",
     "output_queries": "queries",
     "num_workers": 12,
@@ -20,12 +20,12 @@
             "threshold_set": 0.024
         },
         "classic":{
-            "threshold_fake": 0.0055,
-            "threshold_set": 0.0060
+            "threshold_fake": 0.0060,
+            "threshold_set": 0.0062
         },
         "restormer":{
             "threshold_fake": 20.0000,
-            "threshold_set": 18.0000
+            "threshold_set": 21.0000
         }
     }
 }
