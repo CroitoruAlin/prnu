@@ -113,14 +113,26 @@ class NoiseExtractor:
             resolution_scores = []
             all_query_devices = []
 
-            for images, gt_device in tqdm(dataloader):
+            for images, gt_device, _, _ in tqdm(dataloader):
                 if self.config.get('denoiser_type') == 'drunet':
+                    t_align0 = time.time()
                     query_noise = extract_single_drunet(images, self.model, 50, 50)
-                else:
+                    for i, query in enumerate(query_noise):
+                        yield {"device_id": gt_device[i], "resolutions": int(r), "query": query.astype(np.float32)}
+
+                elif self.config.get("denoiser_type") == "restormer":
                     images = images/255.
                     query_noise = extract_single(images, self.model, 50, 50)
-                for i, query in enumerate(query_noise):
-                    yield {"device_id": gt_device[i], "resolutions": int(r), "query": query.astype(np.float32)}
+                    for i, query in enumerate(query_noise):
+                        yield {"device_id": gt_device[i], "resolutions": int(r), "query": query.astype(np.float32)}
+                    
+                else:
+                    queries = []
+                    for image in images.cpu().numpy():
+                        residual = extract_single_classic(image)
+                        queries.append(residual)
+                    for i, query in enumerate(queries):
+                        yield {"device_id": gt_device[i], "resolutions": int(r), "query": query.astype(np.float32)}
 
                 
 

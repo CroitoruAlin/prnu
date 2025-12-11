@@ -227,7 +227,7 @@ def is_png_truncated(filename):
         return b'IEND' not in end
 
 
-
-register_processor = Registration()
-ds = register_processor.register_multiple_devices("../datasets/PRNU")
-ds.save_to_disk(register_processor.config["output_prnu_fingerprint"])
+if __name__ =="__main__":
+    register_processor = Registration()
+    ds = register_processor.register_multiple_devices("../datasets/PRNU")
+    ds.save_to_disk(register_processor.config["output_prnu_fingerprint"])

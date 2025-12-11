@@ -7,6 +7,7 @@ import numpy as np
 from tqdm import tqdm
 from einops import rearrange
 from train import EmbeddingModel
+import wandb
 def filter_ds(ds, used_device):
     devices = list(ds['device_id'])
     indices_select = [i for i,d in enumerate(devices) if d in used_device ]
@@ -51,6 +52,7 @@ if __name__ == "__main__":
     parser.add_argument("--query_path", type=str)
     parser.add_argument("--ckpt_paths", type=str)
     args = parser.parse_args()
+    wandb.init(project="PRNU comparison")
     unique_resolutions = [int(res) for res in args.resolutions.split(",")]
     ckpt_paths = args.ckpt_paths.split(",")
     cc_matrices = []
