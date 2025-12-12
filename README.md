@@ -30,7 +30,8 @@ GIT_LFS_SKIP_SMUDGE=0 git clone https://huggingface.co/acroitoru/PRNU-Bench
 ## Device Registration
 We created a script to evaluate PRNU-based device identification performance on a specific set of devices. The following section outlines the procedure for device registration and the subsequent comparison process for a set of query images.
 
-1. Device Registration.
+### 1. Device Registration.
+
 To register a new device, execute the ```register_device.py``` script. The script accepts two parameters:
 
 ```--input_path```: Specifies the source directory. This can be a folder containing images for a single device, or a root directory containing subfolders for multiple devices. The device name is derived from the folder or subfolder name.
@@ -50,7 +51,8 @@ Important: Few other configurations are stored in ```configs/configs.json```. Fo
 
 After the registration is complete the PRNU signals will be saved at the path specified in ```output_prnu_fingerprint``` which is also in ```configs/configs.json```.
 
-2. Device comparison
+### 2. Device comparison
+   
 After registering your devices, you can compare the noise residuals of new images against your saved PRNU fingerprints using the comparison.py script.
 
 Parameters:
