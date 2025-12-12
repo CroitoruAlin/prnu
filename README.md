@@ -78,7 +78,7 @@ The following command will search for images directly in ```--input_path```, whi
 python comparison.py  --input_path ../datasets/test_prnu/camera_2/
 ```
 
-The results of the script will be saved in ```result.json```.
+The results of the script will be saved in ```result.json```. It will return for each image, the top-5 most similar devices and the associated score.
 
 ## Evaluation on PRNU-Bench
 Update, if necessary, the paths in ```configs/config.json```.
