@@ -43,7 +43,8 @@ def main():
     for i, image_path in enumerate(image_paths):
         current_scores = top_k_scores[i]
         current_devices = top_k_devices[i]
-        answer[image_path] = {'Top 5 most similar devices':[{current_devices[j]: str(current_scores[j])} for j in range(len(current_scores))]}
+        result_threshold_comparison = fakeness_score[i]
+        answer[image_path] = {'Top 5 most similar devices':[{current_devices[j]: str(current_scores[j])} for j in range(len(current_scores))], "Fakeness analysis": result_threshold_comparison}
     with open("result.json", "w") as f:
         json.dump(answer, f)
 if __name__ == "__main__":
