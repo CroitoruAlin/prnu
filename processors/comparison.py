@@ -166,18 +166,17 @@ class Comparison:
         else:
             self.model = None
 
-    def device_comparison(self, image_paths, device_list=None, gt=None):
+    def device_comparison(self, image_paths, device_list=None, gt=None, k=5):
         if self.model is not None:
             self.model.to(self.device)
         device_dataset = {}
         for r, ds_r in self.prnus_per_resolution.items():
             device_dataset[r] = ds_r if device_list is None else filter_dataset_by_list_of_devices(ds_r, device_list)
-
         final_scores = []
-
-        
+        unique_devices = []
         for r in self.config['resolutions']:
             ds_r = device_dataset[r]
+            unique_devices = list(ds_r['device_id'])
             if self.config.get('denoiser_type') == 'restormer':
                 self.comparison_models[r].to(self.device)
             if device_list is None:
@@ -186,12 +185,11 @@ class Comparison:
 
                 base_ids = np.asarray(self.prnus_per_resolution[r]["device_id"])
                 sub_ids = np.asarray(ds_r["device_id"])
-                
+                # print(base_ids, sub_ids)
                 inv = {d: i for i, d in enumerate(base_ids)}
                 rows = np.fromiter((inv[d] for d in sub_ids), dtype=np.int64, count=len(sub_ids))
                 print(len(rows))
                 prnus = self.prnu_cache[r][rows]
-
             print(f"[info] resolution {r}: PRNUs shape {prnus.shape}")
 
             t0 = time.time()
@@ -248,7 +246,12 @@ class Comparison:
                         residual = extract_single_classic(image)
                         queries.append(residual)
                     queries = np.array(queries)
+                    # print(queries.shape, prnus.shape)
+                    # print(prnus.shape)
+                    # print(device_list)
+                    # exit()
                     scores = aligned_cc_torch(queries, prnus)
+                    # print(scores['ncc'].shape)
                     resolution_scores.append(scores['ncc'].T)
                 all_query_devices.extend(gt_device)
 
@@ -275,20 +278,25 @@ class Comparison:
                 results_threshold_comparison.append("not registered")
             else:
                 results_threshold_comparison.append("real")
+        if self.model is not None:
+            self.model.to("cpu")
+        # print(self.devices, all_query_devices)
+        # exit()
+        # if device_list is None:
+        #         unique_devices = self.devices
+        # else:
+        #         unique_devices = device_list
         if gt is not None:
             all_query_devices = np.array(all_query_devices)
-            unique_devices = self.devices
             gt_bin = prnu.gt(unique_devices, all_query_devices)
             print(final_scores.shape, gt_bin.shape)
             # prnu.plot_roc_curve(final_scores, gt_bin)
             stats_cc = prnu.stats(final_scores, gt_bin)
-            print('AUC on CC {:.5f}'.format(stats_cc['auc']))
+            print('AUC {:.5f}'.format(stats_cc['auc']))
             print("Top 1 accuracy", stats_cc["top-1-acc"])
             print("Top 5 accuracy", stats_cc["top-5-acc"])
             print('EER {:.5f}'.format(stats_cc['eer']))
-        if self.model is not None:
-            self.model.to("cpu")
-        return final_scores, results_threshold_comparison
+        return final_scores, results_threshold_comparison, unique_devices
 
 
 if __name__ == "__main__":

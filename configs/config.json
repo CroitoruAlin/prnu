@@ -3,7 +3,7 @@
     "data_path": "../datasets/PRNU",
     "train_devices": "../datasets/PRNU/train_devices.npy",
     "test_devices": "../datasets/PRNU/test_devices.npy",
-    "denoiser_type": "restormer",
+    "denoiser_type": "classic",
     "no_samples_prnu_estimation": 5,
     "resolutions": [1400, 1024],
     "batch_size": 1,

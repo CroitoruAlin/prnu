@@ -53,10 +53,13 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_paths", type=str)
     args = parser.parse_args()
     wandb.init(project="PRNU comparison")
+    with open("configs/config.json", "r") as f:
+        config = json.load(f)
     unique_resolutions = [int(res) for res in args.resolutions.split(",")]
     ckpt_paths = args.ckpt_paths.split(",")
     cc_matrices = []
     weights = []
+    
     for i, r in enumerate(unique_resolutions):
         model = EmbeddingModel(r)
         model(torch.zeros((1, 1, r, r)))
@@ -74,6 +77,8 @@ if __name__ == "__main__":
                 prnu_dl = DataLoader(prnu_ds, batch_size=8, num_workers=8)
                 prnus.append(compute_prnus_restormer(prnu_dl, resolution, unique_devices))
         prnus = torch.from_numpy(np.array(prnus)).to("cuda").unsqueeze(1)
+        if config['denoiser_type'] != 'restormer':
+            prnus
         cc_aligned_rot = []
         batch_size = 8
         all_query_devices = []

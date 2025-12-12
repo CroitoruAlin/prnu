@@ -106,6 +106,7 @@ class Registration():
                 # print(noises.shape)
                 noise_estimated = extract_multiple_aligned_classic(noises)
                 K = noise_estimated
+                print(K.max(), K.min())
                 # print(K.shape)
             # torch.cuda.empty_cache()
             yield {"device_id": all_prnus_devices[0], "device_name": all_prnus_devices[0], 'resolutions': resolution, "prnu": K}
@@ -140,7 +141,8 @@ class Registration():
             return new_ds
 
     def register_device(self, folder_images, device_name, persist=False):
-        self.model.to("cuda")
+        if self.model is not None:
+            self.model.to("cuda")
         image_paths = []
         devices = []
         if isinstance(folder_images, str):
@@ -152,9 +154,12 @@ class Registration():
         else:
             image_paths = folder_images
             devices = [device_name]*len(image_paths)
-
+        if self.config["no_samples_prnu_estimation"]!=-1:
+            image_paths = image_paths[:self.config["no_samples_prnu_estimation"]]
+            devices = devices[:self.config["no_samples_prnu_estimation"]]
         ds = self._create_dataset(image_paths, devices, persist)
-        self.model.to("cpu")
+        if self.model is not None:
+            self.model.to("cpu")
         return ds
 
    

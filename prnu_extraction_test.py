@@ -22,7 +22,7 @@ def main():
     registration = Registration()
     config = registration.config
     config["output_prnu_fingerprint"] = "test_registered_devices"
-    test_devices = np.load(config["test_devices"])
+    test_devices = np.load(config["test_devices"])[:10]
     dataset = load_from_disk(config["data_path"])
 
     query_images_paths = []

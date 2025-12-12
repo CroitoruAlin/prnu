@@ -814,27 +814,27 @@ def aligned_cc_torch(k1: np.ndarray, k2: np.ndarray) -> dict:
           'cc'  : (n1,n2) cross-correlation matrix (float32, numpy)
           'ncc' : (n1,n2) normalized cross-correlation matrix (float32, numpy)
     """
-    # ---- Cast numpy → torch, move to GPU ----
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     t1 = torch.from_numpy(np.asarray(k1, dtype=np.float32)).to(device)
     t2 = torch.from_numpy(np.asarray(k2, dtype=np.float32)).to(device)
 
-    # Flatten to (N, D)
+    
     t1 = t1.reshape(t1.shape[0], -1).contiguous()
     t2 = t2.reshape(t2.shape[0], -1).contiguous()
 
-    # ---- Norms ----
+    
     t1_norm = torch.norm(t1, p=2, dim=1, keepdim=True)  # (n1,1)
     t2_norm = torch.norm(t2, p=2, dim=1, keepdim=True)  # (n2,1)
 
-    # ---- Cross-correlation matrix ----
+    
     cc = t1 @ t2.T   # (n1,n2)
 
-    # ---- Normalized cross-correlation ----
+    
     denom = t1_norm * t2_norm.T
     ncc = cc / denom.clamp(min=1e-12)
 
-    # ---- Back to CPU numpy ----
+    
     cc = cc.float().cpu().numpy()
     ncc = ncc.float().cpu().numpy()
 
@@ -905,8 +905,8 @@ def stats(cc: np.ndarray, gt: np.ndarray, ) -> dict:
     top_5_acc = top_k_accuracy(np.argmax(gt, axis=0), cc.T, k=5)
     fpr, tpr, th = roc_curve(gt.flatten(), cc.flatten())
     auc_score = auc(fpr, tpr)
-    for i, f in enumerate(fpr):
-        wandb.log({"fpr":f, "tpr":tpr[i], "threshold":th[i]})
+    # for i, f in enumerate(fpr):
+    #     wandb.log({"fpr":f, "tpr":tpr[i], "threshold":th[i]})
     # EER
     eer_idx = np.argmin((fpr - (1 - tpr)) ** 2, axis=0)
     eer = float(fpr[eer_idx])
