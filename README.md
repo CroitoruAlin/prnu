@@ -53,7 +53,7 @@ After the registration is complete the PRNU signals will be saved at the path sp
 
 ### 2. Device comparison
    
-After registering your devices, you can compare the noise residuals of new images against your saved PRNU fingerprints using the comparison.py script.
+After registering your devices, you can compare the noise residuals of new images against your saved PRNU fingerprints using the ```comparison.py``` script.
 
 Parameters:
 
