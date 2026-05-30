@@ -8,6 +8,7 @@ from tqdm import tqdm
 from einops import rearrange
 from train import EmbeddingModel
 import wandb
+import json
 def filter_ds(ds, used_device):
     devices = list(ds['device_id'])
     indices_select = [i for i,d in enumerate(devices) if d in used_device ]
@@ -51,10 +52,13 @@ if __name__ == "__main__":
     parser.add_argument("--prnu_signals_path", type=str)
     parser.add_argument("--query_path", type=str)
     parser.add_argument("--ckpt_paths", type=str)
+    parser.add_argument("--denoiser_type", type=str, default = None)
     args = parser.parse_args()
     wandb.init(project="PRNU comparison")
     with open("configs/config.json", "r") as f:
         config = json.load(f)
+    if args.denoiser_type is not None:
+        config['denoiser_type'] = args.denoiser_type
     unique_resolutions = [int(res) for res in args.resolutions.split(",")]
     ckpt_paths = args.ckpt_paths.split(",")
     cc_matrices = []
@@ -77,8 +81,7 @@ if __name__ == "__main__":
                 prnu_dl = DataLoader(prnu_ds, batch_size=8, num_workers=8)
                 prnus.append(compute_prnus_restormer(prnu_dl, resolution, unique_devices))
         prnus = torch.from_numpy(np.array(prnus)).to("cuda").unsqueeze(1)
-        if config['denoiser_type'] != 'restormer':
-            prnus
+
         cc_aligned_rot = []
         batch_size = 8
         all_query_devices = []
@@ -92,7 +95,10 @@ if __name__ == "__main__":
             with torch.no_grad():
                 for i in range(0, size_q*size_p, batch_size):
                     batch = similarities[i:i+batch_size]
-                    scores.extend(batch.sum((1,2,3)).cpu().numpy() + model(batch).cpu().numpy().squeeze())
+                    if config['denoiser_type'] =='restormer':
+                        scores.extend(batch.sum((1,2,3)).cpu().numpy() + model(batch).cpu().numpy().squeeze())
+                    else:
+                        scores.extend(batch.sum((1,2,3)).cpu().numpy())
             scores = np.array(scores).squeeze()
             scores = rearrange(scores, '(q p)->q p', q=size_q, p=size_p)
             

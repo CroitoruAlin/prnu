@@ -13,7 +13,7 @@ from basicsr.models.archs.restormer_arch import Restormer
 from basicsr.models.network_unet import UNetRes
 import torch
 from tqdm import tqdm
-from prnu import extract_single_drunet, extract_single, aligned_cc, aligned_cc_torch
+from prnu import extract_single_drunet, extract_single, extract_single_classic, aligned_cc, aligned_cc_torch
 import prnu
 try:
     from yaml import CLoader as Loader
@@ -87,13 +87,20 @@ class NoiseExtractor:
             self.model = Restormer(**network_config['network_g'])
             weights_path = self.config['denoiser_path']
             self.model.load_state_dict(torch.load(weights_path)['params'])
-        else:
+        elif self.config.get('denoiser_type') == 'drunet':
             self.model = UNetRes(in_nc=4, out_nc=3, nc=[64, 128, 256, 512], nb=4, act_mode='R',
                                  downsample_mode="strideconv", upsample_mode="convtranspose")
             self.model.load_state_dict(torch.load(self.config['denoiser_path']), strict=True)
             self.model.eval()
             for _, v in self.model.named_parameters():
                 v.requires_grad = False
+        else:
+            self.model = UNetRes(in_nc=4, out_nc=3, nc=[64, 128, 256, 512], nb=4, act_mode='R',
+                                 downsample_mode="strideconv", upsample_mode="convtranspose")
+            self.model.eval()
+            for _, v in self.model.named_parameters():
+                v.requires_grad = False
+
 
     def extract_noise(self, image_paths, gt):
         self.model.to("cuda")

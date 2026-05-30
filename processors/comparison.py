@@ -108,9 +108,12 @@ def normalize(batch):
     return batch_norm
 class Comparison:
 
-    def __init__(self, exclude_devices = None):
-        with open("configs/config.json", "r") as f:
-            self.config = json.load(f)
+    def __init__(self, exclude_devices = None, config=None):
+        if config is None:
+            with open("configs/config.json", "r") as f:
+                self.config = json.load(f)
+        else:
+            self.config=config
         self._create_denoiser()
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.registered_devices = load_from_disk(

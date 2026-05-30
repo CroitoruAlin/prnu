@@ -7,17 +7,25 @@ import os
 import torch
 import gc
 import json
-
+import uuid
 def main():
     parser = argparse.ArgumentParser(description='PRNU Computation')
     parser.add_argument("--infer_device_id", action="store_true")
+    parser.add_argument("--prnu_signals_path", type=str, default=None)
     parser.add_argument("--input_path", type=str)
     parser.add_argument("--device_list", type=str, default=None)
+    parser.add_argument("--denoiser_type", type=str, default = None)
     args = parser.parse_args()
     device_list = None
     if args.device_list is not None:
         device_list = args.device_list.split(",")
-    comparison = Comparison()
+    with open("configs/config.json", "r") as f:
+            config = json.load(f)
+    if args.denoiser_type is not None:
+        config['denoiser_type'] = args.denoiser_type
+    if args.prnu_signals_path is not None:
+        config['output_prnu_fingerprint'] = args.prnu_signals_path
+    comparison = Comparison(config=config)
     if args.infer_device_id:
         image_paths = []
         devices = []
@@ -45,7 +53,10 @@ def main():
         current_devices = top_k_devices[i]
         result_threshold_comparison = fakeness_score[i]
         answer[image_path] = {'Top 5 most similar devices':[{current_devices[j]: str(current_scores[j])} for j in range(len(current_scores))], "Fakeness analysis": result_threshold_comparison}
-    with open("result.json", "w") as f:
+    os.makedirs("results", exist_ok=True)
+    name = str(uuid.uuid4())
+    with open(f"results/{name}.json", "w") as f:
         json.dump(answer, f)
+    print(f"The comparsion result is stored in results/{name}.json")
 if __name__ == "__main__":
     main()

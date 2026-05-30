@@ -27,8 +27,51 @@ We share the models that we used in our experiments, here:
 git lfs install
 GIT_LFS_SKIP_SMUDGE=0 git clone https://huggingface.co/acroitoru/PRNU-Bench
 ```
+!!!**IMPORTANT** The default configs expect the folder containing the checkpoints to be called ```checkpoints```. Therefore, we encourage you to rename the repo after download from ```PRNU-Bench``` into ```checkpoints```.
 ## Device Registration
 We created a script to evaluate PRNU-based device identification performance on a specific set of devices. The following section outlines the procedure for device registration and the subsequent comparison process for a set of query images.
+### 0. Test with already registered samples
+You can [download the pre-registered samples here](https://drive.google.com/drive/folders/14_yKqQn4ma2WNmXRc_Q59UrFxeOTYm9r?usp=drive_link). The shared folder contains four archives:
+
+* `registered_devices_classic`: PRNU signals extracted using a traditional denoising technique.
+* `registered_devices_restormer`: PRNU signals extracted using the [Restormer](https://github.com/swz30/Restormer) neural network.
+* `queries_classic`: noise residuals extracted using a traditional denoising technique.
+* `queries_restormer`: noise residuals extracted using the [Restormer](https://github.com/swz30/Restormer) neural network.
+
+You can compare the noise residuals of new images (the noise residuals are extracted automatically, you just need to pass the folder that contains the images that you want to check) against your saved PRNU fingerprints using the ```comparison.py``` script.
+
+Parameters:
+
+```--device_list``` (Optional): Specify a subset of registered devices to compare against. If omitted, the script compares against all saved devices.
+
+```--input_path```: The file path to the input images. This accepts two directory structures:
+
+1) A single folder containing images.
+
+2) A root folder containing subfolders, where each subfolder represents a specific device.
+
+```--denoiser_type```: This parameter specifies what denoising method to use for computing the noise residuals from the input images. It can be either ```classic``` or ```restormer```.
+
+```--prnu_signals_path```: The directory path to the already registered devices. It should match the denoising method, so if ```--denoiser_type``` is set to ```classic``` then the value of this parameter has to be ```registered_devices_classic```. If ```--denoiser_type``` is set to ```restormer``` then the value of this parameter has to be ```registered_devices_restormer```
+
+```--infer_device_id```: Use this flag when using the subfolder structure (structure #2 above). It treats the subfolder names as ground truth device IDs to enable performance metric computation.
+
+Command example:
+```
+python comparison.py --input_path PRNU-Bench/PRNU/camera_3/view_2 --prnu_signals_path registered_devices_restormer --denoiser_type restormer
+python comparison.py --input_path PRNU-Bench/PRNU/camera_3/view_2 --prnu_signals_path registered_devices_classic --denoiser_type classic
+```
+**Important** We provide two denoising methods (the above two commands) because the classic one is faster and the one based on Restormer is slightly better in terms of retrieval performance.
+
+------------------
+If you want to compute the performance stats on the entire PRNU-Bench dataset, you can use the already extracted noise residuals. These residuals are shared in the above drive folder `queries_classic` and `queries_restormer`. You can use the '
+```
+python test.py --prnu_signals_path registered_devices_restormer/ --query_path queries_restormer --ckpt_paths checkpoints/model_1024.pt,checkpoints/model_1400.pt --denoiser restormer
+```
+```
+python test.py --prnu_signals_path registered_devices_classic/ --query_path queries_classic --ckpt_paths checkpoints/model_1024.pt,checkpoints/model_1400.pt --denoiser classic
+```
+
 
 ### 1. Device Registration.
 

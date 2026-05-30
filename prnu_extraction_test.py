@@ -21,8 +21,8 @@ def keep_certain_view(dataset, view):
 def main():
     registration = Registration()
     config = registration.config
-    config["output_prnu_fingerprint"] = "test_registered_devices"
-    test_devices = np.load(config["test_devices"])[:10]
+    config["output_prnu_fingerprint"] = "test_"+config["output_prnu_fingerprint"] 
+    test_devices = np.load(config["test_devices"])#[:10]
     dataset = load_from_disk(config["data_path"])
 
     query_images_paths = []
@@ -58,8 +58,8 @@ def main():
                 "prnu": Sequence(Sequence(Value("float32")))
     })
     noise_extractor = NoiseExtractor()
-    query_ds = Dataset.from_generator(lambda: noise_extractor.extract_noise(query_images_paths, query_devices))
-    query_ds.save_to_disk(config['output_queries'])
+    # query_ds = Dataset.from_generator(lambda: noise_extractor.extract_noise(query_images_paths, query_devices))
+    # query_ds.save_to_disk(config['output_queries'])
 
 if __name__ == "__main__":
     main()
