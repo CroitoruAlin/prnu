@@ -64,7 +64,9 @@ python comparison.py --input_path PRNU-Bench/PRNU/camera_3/view_2 --prnu_signals
 **Important** We provide two denoising methods (the above two commands) because the classic one is faster and the one based on Restormer is slightly better in terms of retrieval performance.
 
 ------------------
-If you want to compute the performance stats on the entire PRNU-Bench dataset, you can use the already extracted noise residuals. These residuals are shared in the above drive folder `queries_classic` and `queries_restormer`. You can use the following commands for this feature:
+To calculate performance statistics across the entire PRNU-Bench dataset, you can utilize the pre-extracted noise residuals located in the `queries_classic` and `queries_restormer` folders.
+
+Run the `test.py` script using one of the following two methods:
 ```
 python test.py --prnu_signals_path registered_devices_restormer/ --query_path queries_restormer --ckpt_paths checkpoints/model_1024.pt,checkpoints/model_1400.pt --denoiser restormer
 ```

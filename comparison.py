@@ -26,6 +26,7 @@ def main():
     if args.prnu_signals_path is not None:
         config['output_prnu_fingerprint'] = args.prnu_signals_path
     comparison = Comparison(config=config)
+    print("Registered devices: ", set(list(comparison.registered_devices['device_id'])))
     if args.infer_device_id:
         image_paths = []
         devices = []
